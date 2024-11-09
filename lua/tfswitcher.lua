@@ -47,7 +47,8 @@ local function process_file(file_path, module_config, is_local)
   local new_lines = {}
 
   for i, line in ipairs(lines) do
-    if line:match(string.format('module%%s*"%s"%%s*{', module_config.name:lower())) then
+    -- Changed this line to use the lowercase module key instead of name
+    if line:match('module%s*"rg"%s*{') then -- Changed from name:lower() to actual module name
       in_module_block = true
       table.insert(new_lines, line)
     elseif in_module_block and line:match('^%s*}') then
