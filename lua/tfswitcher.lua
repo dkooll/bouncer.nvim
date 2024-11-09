@@ -34,7 +34,7 @@ local function with_lsp_management(callback)
 end
 
 -- Function to process file content
-local function process_file(file_path, module_config, is_local)
+local function process_file(file_path, module_key, module_config, is_local)
   -- Read the file
   local lines = vim.fn.readfile(file_path)
   if not lines then
@@ -47,8 +47,8 @@ local function process_file(file_path, module_config, is_local)
   local new_lines = {}
 
   for i, line in ipairs(lines) do
-    -- Changed this line to use the lowercase module key instead of name
-    if line:match('module%s*"rg"%s*{') then -- Changed from name:lower() to actual module name
+    -- Match the exact module key (e.g., "rg", "storage", etc.)
+    if line:match(string.format('module%%s*"%s"%%s*{', module_key)) then
       in_module_block = true
       table.insert(new_lines, line)
     elseif in_module_block and line:match('^%s*}') then
@@ -87,7 +87,7 @@ local function process_file(file_path, module_config, is_local)
   return false
 end
 
-local function create_module_commands(module_config)
+local function create_module_commands(module_key, module_config)
   vim.api.nvim_create_user_command("Switch" .. module_config.name .. "ModulesToLocal", function()
     with_lsp_management(function()
       local find_cmd = "find . -name main.tf"
@@ -95,7 +95,7 @@ local function create_module_commands(module_config)
 
       local modified_count = 0
       for _, file in ipairs(files) do
-        if process_file(file, module_config, true) then
+        if process_file(file, module_key, module_config, true) then
           modified_count = modified_count + 1
           vim.notify("Modified " .. file, vim.log.levels.INFO)
         end
@@ -116,7 +116,7 @@ local function create_module_commands(module_config)
 
       local modified_count = 0
       for _, file in ipairs(files) do
-        if process_file(file, module_config, false) then
+        if process_file(file, module_key, module_config, false) then
           modified_count = modified_count + 1
           vim.notify("Modified " .. file, vim.log.levels.INFO)
         end
@@ -132,18 +132,6 @@ local function create_module_commands(module_config)
 end
 
 function M.setup(opts)
-  -- Default configuration
-  local default_modules = {
-    storage = {
-      name = "Storage",
-      registry_source = "cloudnationhq/sa/azure",
-      version = "~> 2.0"
-    }
-  }
-
-  -- Merge user config with defaults
-  local modules = vim.tbl_deep_extend("force", default_modules, opts or {})
-
   -- Setup LSP handling
   vim.api.nvim_create_autocmd("FileType", {
     pattern = "terraform",
@@ -153,8 +141,8 @@ function M.setup(opts)
   })
 
   -- Create commands for each module
-  for _, module_config in pairs(modules) do
-    create_module_commands(module_config)
+  for module_key, module_config in pairs(opts) do
+    create_module_commands(module_key, module_config)
   end
 end
 
