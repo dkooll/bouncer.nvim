@@ -2,17 +2,15 @@ local M = {}
 
 -- Helper function to extract module name from registry source
 local function get_module_name(registry_source)
-  -- Extract the second part of the path (e.g., "sa" from "cloudnationhq/sa/azure")
   local module_name = registry_source:match("^[^/]+/([^/]+)/")
   if not module_name then
     error("Invalid registry source format: " .. registry_source)
   end
-  -- Return both lowercase and capitalized versions for flexibility
   return module_name:lower(), module_name:sub(1, 1):upper() .. module_name:sub(2):lower()
 end
 
 -- Function to process file content
-local function process_file(file_path, module_key, module_config, is_local)
+local function process_file(file_path, module_name, module_config, is_local)
   -- Read the file
   local lines = vim.fn.readfile(file_path)
   if not lines then
@@ -25,7 +23,8 @@ local function process_file(file_path, module_key, module_config, is_local)
   local new_lines = {}
 
   for i, line in ipairs(lines) do
-    if line:match(string.format('module%%s*"%s"%%s*{', module_key)) then
+    -- Use the extracted module name from registry_source instead of the config key
+    if line:match(string.format('module%%s*"%s"%%s*{', module_name:lower())) then
       in_module_block = true
       table.insert(new_lines, line)
     elseif in_module_block and line:match('^%s*}') then
@@ -64,7 +63,7 @@ local function process_file(file_path, module_key, module_config, is_local)
   return false
 end
 
-local function create_module_commands(module_key, module_config)
+local function create_module_commands(_, module_config)
   local module_name_lower, module_name_cap = get_module_name(module_config.registry_source)
 
   for _, name in ipairs({ module_name_lower, module_name_cap }) do
@@ -73,7 +72,7 @@ local function create_module_commands(module_key, module_config)
       local files = vim.fn.systemlist(find_cmd)
       local modified_count = 0
       for _, file in ipairs(files) do
-        if process_file(file, module_key, module_config, true) then
+        if process_file(file, module_name_lower, module_config, true) then
           modified_count = modified_count + 1
           vim.notify("Modified " .. file, vim.log.levels.INFO)
         end
@@ -91,7 +90,7 @@ local function create_module_commands(module_key, module_config)
       local files = vim.fn.systemlist(find_cmd)
       local modified_count = 0
       for _, file in ipairs(files) do
-        if process_file(file, module_key, module_config, false) then
+        if process_file(file, module_name_lower, module_config, false) then
           modified_count = modified_count + 1
           vim.notify("Modified " .. file, vim.log.levels.INFO)
         end
@@ -107,8 +106,8 @@ local function create_module_commands(module_key, module_config)
 end
 
 function M.setup(opts)
-  for module_key, module_config in pairs(opts) do
-    create_module_commands(module_key, module_config)
+  for _, module_config in pairs(opts) do
+    create_module_commands(_, module_config)
   end
 end
 
