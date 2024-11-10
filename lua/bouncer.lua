@@ -7,11 +7,15 @@ local function get_module_name(registry_source)
   if not module_name then
     error("Invalid registry source format: " .. registry_source)
   end
-  return module_name:lower(), module_name:sub(1,1):upper() .. module_name:sub(2):lower()
+  -- Return lowercase and uppercase first letter versions
+  return {
+    module_name:lower(),                                    -- e.g., "vnet"
+    module_name:sub(1,1):upper() .. module_name:sub(2),    -- e.g., "Vnet"
+  }
 end
 
 -- Function to process file content
-local function process_file(file_path, module_key, module_config, is_local)
+local function process_file(file_path, module_config, is_local)
   local lines = vim.fn.readfile(file_path)
   if not lines then
     vim.notify("Failed to read file: " .. file_path, vim.log.levels.ERROR)
@@ -23,10 +27,8 @@ local function process_file(file_path, module_key, module_config, is_local)
   local new_lines = {}
 
   for i, line in ipairs(lines) do
-    -- Check for module block
     if line:match('module%s*"%w+"%s*{') then
       table.insert(new_lines, line)
-      -- Look ahead for source line
       local next_line = lines[i + 1]
       if next_line and next_line:match(module_config.registry_source) then
         in_module_block = true
@@ -68,16 +70,17 @@ local function process_file(file_path, module_key, module_config, is_local)
 end
 
 local function create_module_commands(_, module_config)
-  local module_name_lower, module_name_cap = get_module_name(module_config.registry_source)
+  local module_names = get_module_name(module_config.registry_source)
 
-  for _, name in ipairs({module_name_lower, module_name_cap}) do
+  for _, name in ipairs(module_names) do
+    -- Create command for switching to local
     vim.api.nvim_create_user_command("Switch" .. name .. "ModulesToLocal", function()
       local find_cmd = "find . -name main.tf"
       local files = vim.fn.systemlist(find_cmd)
 
       local modified_count = 0
       for _, file in ipairs(files) do
-        if process_file(file, nil, module_config, true) then
+        if process_file(file, module_config, true) then
           modified_count = modified_count + 1
           vim.notify("Modified " .. file, vim.log.levels.INFO)
         end
@@ -90,12 +93,13 @@ local function create_module_commands(_, module_config)
       vim.cmd('edit')
     end, {})
 
+    -- Create command for switching to registry
     vim.api.nvim_create_user_command("Switch" .. name .. "ModulesToRegistry", function()
       local find_cmd = "find . -name main.tf"
       local files = vim.fn.systemlist(find_cmd)
       local modified_count = 0
       for _, file in ipairs(files) do
-        if process_file(file, nil, module_config, false) then
+        if process_file(file, module_config, false) then
           modified_count = modified_count + 1
           vim.notify("Modified " .. file, vim.log.levels.INFO)
         end
