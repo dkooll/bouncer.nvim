@@ -16,23 +16,28 @@ end
 local function get_latest_major_version(registry_source)
   local plenary_http = require("plenary.curl")
   local registry_url = string.format("https://registry.terraform.io/v1/modules/%s/versions", registry_source)
-  local result = plenary_http.get(registry_url)
+  local result = plenary_http.get({ url = registry_url, accept = "application/json" })
 
-  if result and result.status == 200 then
-    local versions = vim.fn.json_decode(result.body).versions
-    for _, version in ipairs(versions) do
-      if version.version:match("^%d+") then -- Matches any major version
-        return version.version              -- Returns latest major version match
+  if result and result.status == 200 and result.body then
+    local data = vim.fn.json_decode(result.body)
+    if data and data.versions then
+      for _, version_info in ipairs(data.versions) do
+        if version_info.version:match("^%d+") then -- Matches any major version (e.g., "3.0.1")
+          return version_info.version  -- Returns latest major version match
+        end
       end
+    else
+      vim.notify("Failed to parse JSON or 'versions' field not found.", vim.log.levels.ERROR)
     end
   else
-    vim.notify("Failed to fetch latest version for " .. registry_source, vim.log.levels.ERROR)
+    vim.notify("Failed to fetch latest version for " .. registry_source .. ": " .. (result and result.status or "No response"), vim.log.levels.ERROR)
   end
 
-  return nil
+  return nil  -- Return nil if no version found or an error occurred
 end
 
 -- Function to process file content
+
 local function process_file(file_path, module_config, is_local)
   local lines = vim.fn.readfile(file_path)
   if not lines then
@@ -47,6 +52,7 @@ local function process_file(file_path, module_config, is_local)
   for i, line in ipairs(lines) do
     if not in_module_block then
       table.insert(new_lines, line)
+      -- Detect start of module block
       if line:match('module%s*"[^"]*"%s*{') and lines[i + 1] then
         if lines[i + 1]:match('source%s*=%s*"' .. module_config.registry_source .. '"') or
             lines[i + 1]:match('source%s*=%s*"../../"') then
@@ -57,6 +63,7 @@ local function process_file(file_path, module_config, is_local)
       in_module_block = false
       table.insert(new_lines, line)
     else
+      -- Replace source with local or registry source
       if line:match('%s*source%s*=') then
         if is_local then
           table.insert(new_lines, '  source = "../../"')
@@ -64,11 +71,15 @@ local function process_file(file_path, module_config, is_local)
           table.insert(new_lines, string.format('  source  = "%s"', module_config.registry_source))
         end
         modified = true
+      -- Remove version line if switching to local
       elseif is_local and line:match('%s*version%s*=') then
         modified = true
+      -- Add version if switching to registry and not already present
       elseif not is_local and not line:match('%s*version%s*=') and lines[i - 1]:match('%s*source%s*=') then
-        table.insert(new_lines,
-          string.format('  version = "%s"', get_latest_major_version(module_config.registry_source)))
+        local latest_version = get_latest_major_version(module_config.registry_source)
+        if latest_version then
+          table.insert(new_lines, string.format('  version = "%s"', latest_version))
+        end
         table.insert(new_lines, line)
         modified = true
       else
@@ -77,6 +88,7 @@ local function process_file(file_path, module_config, is_local)
     end
   end
 
+  -- Write back modified lines if there were changes
   if modified then
     if vim.fn.writefile(new_lines, file_path) == -1 then
       vim.notify("Failed to write file: " .. file_path, vim.log.levels.ERROR)
