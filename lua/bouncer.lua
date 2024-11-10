@@ -13,7 +13,7 @@ local function get_module_name(registry_source)
 end
 
 
-local function get_latest_major_version(registry_source, desired_major)
+local function get_latest_major_version(registry_source)
   local plenary_http = require("plenary.curl")
 
   -- Parse the registry source into namespace, name, and provider
@@ -31,20 +31,20 @@ local function get_latest_major_version(registry_source, desired_major)
   if result and result.status == 200 and result.body then
     local data = vim.fn.json_decode(result.body)
     if data and data.modules and data.modules[1] and data.modules[1].versions then
-      local latest_version = nil
-      local major_prefix = tostring(desired_major) .. "%."
-
-      -- Filter versions to find the latest matching the desired major version
+      -- Find the highest major version available
+      local latest_major_version = nil
       for _, version_info in ipairs(data.modules[1].versions) do
-        if version_info.version:match("^" .. major_prefix) then
-          if not latest_version or version_info.version > latest_version then
-            latest_version = version_info.version
+        local major = version_info.version:match("^(%d+)") -- Extract the major version
+        if major then
+          major = tonumber(major)
+          if not latest_major_version or major > latest_major_version then
+            latest_major_version = major
           end
         end
       end
 
-      if latest_version then
-        return "~> " .. desired_major .. ".0" -- Format the version constraint as "~> X.0"
+      if latest_major_version then
+        return "~> " .. latest_major_version .. ".0" -- Format the version constraint as "~> X.0"
       end
     else
       vim.notify("Failed to parse JSON or 'modules'/'versions' field not found.", vim.log.levels.ERROR)
@@ -57,8 +57,6 @@ local function get_latest_major_version(registry_source, desired_major)
 
   return nil -- Return nil if no version found or an error occurred
 end
-
-
 
 -- Function to process file content
 local function process_file(file_path, module_config, is_local)
@@ -95,19 +93,28 @@ local function process_file(file_path, module_config, is_local)
         end
         modified = true
 
-      -- Remove version line if switching to local
-      elseif is_local and line:match('%s*version%s*=') then
-        modified = true
+        -- Handle version line based on local or registry setting
+      elseif line:match('%s*version%s*=') then
+        if is_local then
+          -- Remove version line if switching to local
+          modified = true
+        else
+          -- Always update version to the latest major version constraint from the registry
+          local latest_version_constraint = get_latest_major_version(module_config.registry_source)
+          if latest_version_constraint then
+            table.insert(new_lines, string.format('  version = "%s"', latest_version_constraint))
+          end
+          modified = true
+        end
 
-      -- Add version constraint if switching to registry and no version is present
+        -- If no version line is present and switching to registry, add version constraint
       elseif not is_local and not line:match('%s*version%s*=') and lines[i - 1]:match('%s*source%s*=') then
-        local latest_version_constraint = get_latest_major_version(module_config.registry_source, 7)  -- Specify desired major version
+        local latest_version_constraint = get_latest_major_version(module_config.registry_source)
         if latest_version_constraint then
           table.insert(new_lines, string.format('  version = "%s"', latest_version_constraint))
         end
         table.insert(new_lines, line)
         modified = true
-
       else
         table.insert(new_lines, line)
       end
