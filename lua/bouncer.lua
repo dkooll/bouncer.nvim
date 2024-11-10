@@ -1,5 +1,6 @@
 local M = {}
 
+-- Helper function to extract module name from registry source
 local function get_module_name(registry_source)
   local module_name = registry_source:match("^[^/]+/([^/]+)/")
   if not module_name then
@@ -11,6 +12,27 @@ local function get_module_name(registry_source)
   }
 end
 
+-- Function to fetch the latest major version from the Terraform registry
+local function get_latest_major_version(registry_source)
+  local plenary_http = require("plenary.curl")
+  local registry_url = string.format("https://registry.terraform.io/v1/modules/%s/versions", registry_source)
+  local result = plenary_http.get(registry_url)
+
+  if result and result.status == 200 then
+    local versions = vim.fn.json_decode(result.body).versions
+    for _, version in ipairs(versions) do
+      if version.version:match("^%d+") then -- Matches any major version
+        return version.version              -- Returns latest major version match
+      end
+    end
+  else
+    vim.notify("Failed to fetch latest version for " .. registry_source, vim.log.levels.ERROR)
+  end
+
+  return nil
+end
+
+-- Function to process file content
 local function process_file(file_path, module_config, is_local)
   local lines = vim.fn.readfile(file_path)
   if not lines then
@@ -45,7 +67,8 @@ local function process_file(file_path, module_config, is_local)
       elseif is_local and line:match('%s*version%s*=') then
         modified = true
       elseif not is_local and not line:match('%s*version%s*=') and lines[i - 1]:match('%s*source%s*=') then
-        table.insert(new_lines, string.format('  version = "%s"', module_config.version))
+        table.insert(new_lines,
+          string.format('  version = "%s"', get_latest_major_version(module_config.registry_source)))
         table.insert(new_lines, line)
         modified = true
       else
@@ -119,7 +142,6 @@ return M
 
 --local M = {}
 
----- Helper function to extract module name from registry source
 --local function get_module_name(registry_source)
 --local module_name = registry_source:match("^[^/]+/([^/]+)/")
 --if not module_name then
@@ -131,7 +153,6 @@ return M
 --}
 --end
 
----- Function to process file content
 --local function process_file(file_path, module_config, is_local)
 --local lines = vim.fn.readfile(file_path)
 --if not lines then
@@ -147,7 +168,6 @@ return M
 --if not in_module_block then
 --table.insert(new_lines, line)
 --if line:match('module%s*"[^"]*"%s*{') and lines[i + 1] then
----- Match both registry source and local source
 --if lines[i + 1]:match('source%s*=%s*"' .. module_config.registry_source .. '"') or
 --lines[i + 1]:match('source%s*=%s*"../../"') then
 --in_module_block = true
@@ -191,7 +211,7 @@ return M
 --local module_names = get_module_name(module_config.registry_source)
 
 --for _, name in ipairs(module_names) do
---vim.api.nvim_create_user_command("Switch" .. name .. "ModulesToLocal", function()
+--vim.api.nvim_create_user_command("Bounce" .. name .. "ToLocal", function()
 --local find_cmd = "find . -name main.tf"
 --local files = vim.fn.systemlist(find_cmd)
 
@@ -210,7 +230,7 @@ return M
 --vim.cmd('edit')
 --end, {})
 
---vim.api.nvim_create_user_command("Switch" .. name .. "ModulesToRegistry", function()
+--vim.api.nvim_create_user_command("Bounce" .. name .. "ToRegistry", function()
 --local find_cmd = "find . -name main.tf"
 --local files = vim.fn.systemlist(find_cmd)
 --local modified_count = 0
