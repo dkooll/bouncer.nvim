@@ -7,7 +7,7 @@ local function get_module_name(registry_source)
     error("Invalid registry source format: " .. registry_source)
   end
   return {
-    module_name:lower(),                               -- e.g., "vnet"
+    module_name:lower(),                                -- e.g., "vnet"
     module_name:sub(1, 1):upper() .. module_name:sub(2), -- e.g., "Vnet"
   }
 end
@@ -28,7 +28,9 @@ local function process_file(file_path, module_config, is_local)
     if not in_module_block then
       table.insert(new_lines, line)
       if line:match('module%s*"[^"]*"%s*{') and lines[i + 1] then
-        if lines[i + 1]:match('source%s*=%s*"' .. module_config.registry_source .. '"') then
+        -- Match both registry source and local source
+        if lines[i + 1]:match('source%s*=%s*"' .. module_config.registry_source .. '"') or
+            lines[i + 1]:match('source%s*=%s*"../../"') then
           in_module_block = true
         end
       end
