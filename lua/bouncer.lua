@@ -83,6 +83,7 @@ local function process_file(file_path, module_config, is_local)
   return false
 end
 
+
 function M.show_commands()
   if not has_telescope then
     return
@@ -91,10 +92,10 @@ function M.show_commands()
   local commands = {}
   local current_dir = vim.fn.getcwd()
 
-  -- Determine the relevant registry source based on the current directory
+  -- Determine the relevant registry source based on the configured directory field
   local relevant_registry_source
   for _, config in pairs(_G.bouncer_configs or {}) do
-    if current_dir:match(config.registry_source) then
+    if current_dir:find(config.directory, 1, true) then
       relevant_registry_source = config.registry_source
       break
     end
