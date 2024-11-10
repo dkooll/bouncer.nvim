@@ -12,8 +12,8 @@ local function get_module_name(registry_source)
   }
 end
 
--- Function to fetch the latest major version from the Terraform registry
-local function get_latest_major_version(registry_source)
+
+local function get_latest_major_version(registry_source, desired_major)
   local plenary_http = require("plenary.curl")
 
   -- Parse the registry source into namespace, name, and provider
@@ -31,11 +31,20 @@ local function get_latest_major_version(registry_source)
   if result and result.status == 200 and result.body then
     local data = vim.fn.json_decode(result.body)
     if data and data.modules and data.modules[1] and data.modules[1].versions then
-      -- Find the latest version from the list of versions
+      local latest_version = nil
+      local major_prefix = tostring(desired_major) .. "%."
+
+      -- Filter versions to find the latest matching the desired major version
       for _, version_info in ipairs(data.modules[1].versions) do
-        if version_info.version:match("^%d+") then -- Matches any major version (e.g., "3.0.1")
-          return version_info.version              -- Returns latest major version match
+        if version_info.version:match("^" .. major_prefix) then
+          if not latest_version or version_info.version > latest_version then
+            latest_version = version_info.version
+          end
         end
+      end
+
+      if latest_version then
+        return "~> " .. desired_major .. ".0" -- Format the version constraint as "~> X.0"
       end
     else
       vim.notify("Failed to parse JSON or 'modules'/'versions' field not found.", vim.log.levels.ERROR)
@@ -48,6 +57,7 @@ local function get_latest_major_version(registry_source)
 
   return nil -- Return nil if no version found or an error occurred
 end
+
 
 
 -- Function to process file content
@@ -84,17 +94,20 @@ local function process_file(file_path, module_config, is_local)
           table.insert(new_lines, string.format('  source  = "%s"', module_config.registry_source))
         end
         modified = true
-        -- Remove version line if switching to local
+
+      -- Remove version line if switching to local
       elseif is_local and line:match('%s*version%s*=') then
         modified = true
-        -- Add version if switching to registry and not already present
+
+      -- Add version constraint if switching to registry and no version is present
       elseif not is_local and not line:match('%s*version%s*=') and lines[i - 1]:match('%s*source%s*=') then
-        local latest_version = get_latest_major_version(module_config.registry_source)
-        if latest_version then
-          table.insert(new_lines, string.format('  version = "%s"', latest_version))
+        local latest_version_constraint = get_latest_major_version(module_config.registry_source, 7)  -- Specify desired major version
+        if latest_version_constraint then
+          table.insert(new_lines, string.format('  version = "%s"', latest_version_constraint))
         end
         table.insert(new_lines, line)
         modified = true
+
       else
         table.insert(new_lines, line)
       end
