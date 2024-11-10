@@ -89,36 +89,51 @@ function M.show_commands()
   end
 
   local commands = {}
+  local current_dir = vim.fn.getcwd()
+
+  -- Determine the relevant registry source based on the current directory
+  local relevant_registry_source
+  for _, config in pairs(_G.bouncer_configs or {}) do
+    if current_dir:match(config.registry_source) then
+      relevant_registry_source = config.registry_source
+      break
+    end
+  end
+
+  -- If no matching registry source, notify the user and return
+  if not relevant_registry_source then
+    vim.notify("No relevant modules found for this repository.", vim.log.levels.WARN)
+    return
+  end
+
+  -- Only add commands that match the relevant registry source
   local all_commands = vim.api.nvim_get_commands({})
   for name in pairs(all_commands) do
     if name:match("^Switch.*ModulesTo") then
-      -- Extract direction
       local direction = name:match("ModulesTo(.+)$")
-
-      -- Find matching module config to get registry source
       local registry_source = ""
+
       for _, config in pairs(_G.bouncer_configs or {}) do
-        local module_names = get_module_name(config.registry_source)
-        for _, mname in ipairs(module_names) do
-          if name:match("^Switch" .. mname) then
-            registry_source = config.registry_source
-            break
+        if config.registry_source == relevant_registry_source then
+          local module_names = get_module_name(config.registry_source)
+          for _, mname in ipairs(module_names) do
+            if name:match("^Switch" .. mname) then
+              registry_source = config.registry_source
+              break
+            end
           end
         end
       end
 
-      local display = string.format("%-40s %s",
-        registry_source,
-        direction
-      )
-
-      table.insert(commands, {
-        name = name,
-        display = display
-      })
+      -- Only include the relevant commands
+      if registry_source == relevant_registry_source then
+        local display = string.format("%-40s %s", registry_source, direction)
+        table.insert(commands, { name = name, display = display })
+      end
     end
   end
 
+  -- Show filtered commands in Telescope
   pickers.new({}, {
     prompt_title = "Bouncer Commands",
     finder = finders.new_table {
@@ -142,6 +157,66 @@ function M.show_commands()
     end,
   }):find()
 end
+
+--function M.show_commands()
+  --if not has_telescope then
+    --return
+  --end
+
+  --local commands = {}
+  --local all_commands = vim.api.nvim_get_commands({})
+  --for name in pairs(all_commands) do
+    --if name:match("^Switch.*ModulesTo") then
+      ---- Extract direction
+      --local direction = name:match("ModulesTo(.+)$")
+
+      ---- Find matching module config to get registry source
+      --local registry_source = ""
+      --for _, config in pairs(_G.bouncer_configs or {}) do
+        --local module_names = get_module_name(config.registry_source)
+        --for _, mname in ipairs(module_names) do
+          --if name:match("^Switch" .. mname) then
+            --registry_source = config.registry_source
+            --break
+          --end
+        --end
+      --end
+
+      --local display = string.format("%-40s %s",
+        --registry_source,
+        --direction
+      --)
+
+      --table.insert(commands, {
+        --name = name,
+        --display = display
+      --})
+    --end
+  --end
+
+  --pickers.new({}, {
+    --prompt_title = "Bouncer Commands",
+    --finder = finders.new_table {
+      --results = commands,
+      --entry_maker = function(entry)
+        --return {
+          --value = entry.name,
+          --display = entry.display,
+          --ordinal = entry.display,
+        --}
+      --end,
+    --},
+    --sorter = conf.generic_sorter({}),
+    --attach_mappings = function(prompt_bufnr, _)
+      --actions.select_default:replace(function()
+        --actions.close(prompt_bufnr)
+        --local selection = action_state.get_selected_entry()
+        --vim.cmd(selection.value)
+      --end)
+      --return true
+    --end,
+  --}):find()
+--end
 
 local function create_module_commands(_, module_config)
   local module_names = get_module_name(module_config.registry_source)
