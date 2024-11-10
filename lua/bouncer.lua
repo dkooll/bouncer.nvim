@@ -1,3 +1,4 @@
+
 local M = {}
 
 -- Helper function to extract module name from registry source
@@ -6,13 +7,11 @@ local function get_module_name(registry_source)
   if not module_name then
     error("Invalid registry source format: " .. registry_source)
   end
-  -- Print for debugging
-  vim.notify("Extracted module name: " .. module_name, vim.log.levels.INFO)
   return module_name:lower(), module_name:sub(1,1):upper() .. module_name:sub(2):lower()
 end
 
 -- Function to process file content
-local function process_file(file_path, module_names, module_config, is_local)
+local function process_file(file_path, _, module_config, is_local)
   -- Read the file
   local lines = vim.fn.readfile(file_path)
   if not lines then
@@ -25,12 +24,16 @@ local function process_file(file_path, module_names, module_config, is_local)
   local new_lines = {}
 
   for i, line in ipairs(lines) do
-    -- Check for both lowercase and capitalized module names
-    local module_pattern = string.format('module%%s*"[%s%s]"%%s*{', module_names[1], module_names[2])
-    if line:match(module_pattern) then
-      vim.notify("Found module block: " .. line, vim.log.levels.INFO)
-      in_module_block = true
+    if not in_module_block then
+      -- Just add the line if we're not in a module block
       table.insert(new_lines, line)
+      -- Check if this is a module block and the next lines contain our source
+      if line:match('module%s*"%w+"%%s*{') then
+        local next_line = lines[i + 1]
+        if next_line and next_line:match(string.format('source.*=.*%s', module_config.registry_source)) then
+          in_module_block = true
+        end
+      end
     elseif in_module_block and line:match('^%s*}') then
       in_module_block = false
       table.insert(new_lines, line)
@@ -70,17 +73,14 @@ end
 local function create_module_commands(_, module_config)
   local module_name_lower, module_name_cap = get_module_name(module_config.registry_source)
 
-  vim.notify(string.format("Creating commands for module: %s and %s", module_name_lower, module_name_cap), vim.log.levels.INFO)
-
   for _, name in ipairs({module_name_lower, module_name_cap}) do
     vim.api.nvim_create_user_command("Switch" .. name .. "ModulesToLocal", function()
       local find_cmd = "find . -name main.tf"
       local files = vim.fn.systemlist(find_cmd)
-      vim.notify("Searching in files: " .. vim.inspect(files), vim.log.levels.INFO)
 
       local modified_count = 0
       for _, file in ipairs(files) do
-        if process_file(file, {module_name_lower, module_name_cap}, module_config, true) then
+        if process_file(file, nil, module_config, true) then
           modified_count = modified_count + 1
           vim.notify("Modified " .. file, vim.log.levels.INFO)
         end
@@ -98,7 +98,7 @@ local function create_module_commands(_, module_config)
       local files = vim.fn.systemlist(find_cmd)
       local modified_count = 0
       for _, file in ipairs(files) do
-        if process_file(file, {module_name_lower, module_name_cap}, module_config, false) then
+        if process_file(file, nil, module_config, false) then
           modified_count = modified_count + 1
           vim.notify("Modified " .. file, vim.log.levels.INFO)
         end
@@ -120,6 +120,7 @@ function M.setup(opts)
 end
 
 return M
+
 
 
 --local M = {}
