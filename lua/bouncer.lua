@@ -103,13 +103,20 @@ local function create_all_to_latest_command()
     local find_cmd = "find . -name main.tf"
     local files = vim.fn.systemlist(find_cmd)
 
+    -- Track files that have been updated to avoid duplicate notifications
+    local updated_files = {}
     local modified_count = 0
+
     for _, file in ipairs(files) do
       for _, module_config in pairs(_G.bouncer_configs or {}) do
         local latest_version = get_latest_major_version(module_config.registry_source)
-        if latest_version and process_file(file, module_config, false, latest_version) then
-          modified_count = modified_count + 1
-          vim.notify("Updated " .. file .. " to latest version", vim.log.levels.INFO)
+        if latest_version and not updated_files[file] then
+          -- Only process each file once
+          if process_file(file, module_config, false, latest_version) then
+            modified_count = modified_count + 1
+            updated_files[file] = true
+            vim.notify("Updated " .. file .. " to latest major version: " .. latest_version, vim.log.levels.INFO)
+          end
         end
       end
     end
