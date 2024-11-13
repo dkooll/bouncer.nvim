@@ -68,6 +68,7 @@ local function process_file(file_path, module_config, is_local)
   local in_module_block = false
   local new_lines = {}
   local block_indent = ""
+  local version_added = false
 
   for i, line in ipairs(lines) do
     if not in_module_block then
@@ -95,8 +96,17 @@ local function process_file(file_path, module_config, is_local)
               table.insert(new_lines, string.format('%s  source  = "%s"', block_indent, module_config.registry_source))
             end
             modified = true
-          elseif line:match('%s*version%s*=') and line:match('^' .. block_indent .. '%s+version%s*=') then
+
+            -- Add version immediately after source for registry mode
             if not is_local then
+              local latest_version_constraint = get_latest_major_version(module_config.registry_source)
+              if latest_version_constraint then
+                table.insert(new_lines, string.format('%s  version = "%s"', block_indent, latest_version_constraint))
+                version_added = true
+              end
+            end
+          elseif line:match('%s*version%s*=') and line:match('^' .. block_indent .. '%s+version%s*=') then
+            if not is_local and not version_added then
               local latest_version_constraint = get_latest_major_version(module_config.registry_source)
               if latest_version_constraint then
                 table.insert(new_lines, string.format('%s  version = "%s"', block_indent, latest_version_constraint))
@@ -108,17 +118,6 @@ local function process_file(file_path, module_config, is_local)
           end
         else
           table.insert(new_lines, line)
-        end
-
-        if not is_local and i > 1 and
-            lines[i - 1]:match('^' .. block_indent .. '%s+source%s*=') and
-            not line:match('^' .. block_indent .. '%s+version%s*=') then
-          local latest_version_constraint = get_latest_major_version(module_config.registry_source)
-          if latest_version_constraint then
-            table.insert(new_lines, string.format('%s  version = "%s"', block_indent, latest_version_constraint))
-            table.insert(new_lines, line)
-            modified = true
-          end
         end
       end
     end
