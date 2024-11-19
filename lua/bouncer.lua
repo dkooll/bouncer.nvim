@@ -39,7 +39,6 @@ end
 local function get_latest_major_version(registry_source)
   local plenary_http = require("plenary.curl")
 
-  -- Renamed 'namespace' to 'ns' to avoid scope conflict
   local ns, module_name, provider = registry_source:match("^([^/]+)/([^/]+)/([^/]+)$")
   if not (ns and module_name and provider) then
     vim.notify("Invalid registry source format: " .. registry_source, vim.log.levels.ERROR)
@@ -95,13 +94,13 @@ local function process_file(file_path, module_config, is_local)
   local new_lines = {}
   local block_indent = ""
 
-  for i, line in ipairs(lines) do
+  for _, line in ipairs(lines) do
     if not in_module_block then
       table.insert(new_lines, line)
       local module_match = line:match('(%s*)module%s*"[^"]*"%s*{')
-      if module_match and lines[i + 1] then
+      if module_match and lines[_ + 1] then
         block_indent = module_match
-        local next_line = lines[i + 1]
+        local next_line = lines[_ + 1]
         if next_line:match('source%s*=%s*"' .. module_config.registry_source .. '"') or
             next_line:match('source%s*=%s*"../../"') then
           in_module_block = true
@@ -136,6 +135,92 @@ local function process_file(file_path, module_config, is_local)
         end
       end
     end
+  end
+
+  if modified then
+    if vim.fn.writefile(new_lines, file_path) == -1 then
+      vim.notify("Failed to write file: " .. file_path, vim.log.levels.ERROR)
+      return false
+    end
+    return true
+  end
+
+  return false
+end
+
+local function process_file_for_all_modules(file_path)
+  local lines = vim.fn.readfile(file_path)
+  if not lines then
+    vim.notify("Failed to read file: " .. file_path, vim.log.levels.ERROR)
+    return false
+  end
+
+  local modified = false
+  local in_module_block = false
+  local new_lines = {}
+  local block_indent = ""
+  local current_module_name = ""
+  local source_line_index = nil
+  local version_line_index = nil
+  local source_line = nil
+
+  for _, line in ipairs(lines) do
+    table.insert(new_lines, line)
+
+    if not in_module_block then
+      local module_match = line:match('(%s*)module%s*"[^"]*"%s*{')
+      if module_match then
+        in_module_block = true
+        block_indent = module_match
+        current_module_name = line:match('module%s*"([^"]+)"')
+        source_line_index = nil
+        version_line_index = nil
+        source_line = nil
+      end
+    else
+      if line:match('^' .. block_indent .. '}') then
+        in_module_block = false
+
+        if source_line_index and source_line then
+          local source_value = source_line:match('source%s*=%s*"(.-)"')
+          if source_value then
+            local registry_source = source_value
+            if registry_source and (registry_source:match("^%./") or registry_source:match("^%.%./")) then
+              -- Skip local modules
+              goto continue
+            end
+            local latest_version_constraint = get_latest_major_version(registry_source)
+            if latest_version_constraint then
+              if version_line_index then
+                -- Update existing version line
+                new_lines[version_line_index] = string.format('%s  version = "%s"', block_indent,
+                  latest_version_constraint)
+              else
+                -- Add version line after source line
+                table.insert(new_lines, source_line_index + 1,
+                  string.format('%s  version = "%s"', block_indent, latest_version_constraint))
+              end
+              modified = true
+            else
+              vim.notify("Could not fetch latest version for module '" .. current_module_name .. "'", vim.log.levels
+              .WARN)
+            end
+          end
+        end
+      else
+        -- Inside module block
+        local line_indent = line:match('^(%s*)')
+        if line_indent == block_indent .. '  ' then
+          if line:match('%s*source%s*=') then
+            source_line_index = #new_lines
+            source_line = line
+          elseif line:match('%s*version%s*=') then
+            version_line_index = #new_lines
+          end
+        end
+      end
+    end
+    ::continue::
   end
 
   if modified then
@@ -191,6 +276,26 @@ local function create_commands()
     end
     vim.cmd('edit')
   end, {})
+
+  vim.api.nvim_create_user_command("BounceModulesToRegistry", function()
+    local find_cmd = "find . -name main.tf"
+    local files = vim.fn.systemlist(find_cmd)
+
+    local modified_count = 0
+    for _, file in ipairs(files) do
+      if process_file_for_all_modules(file) then
+        modified_count = modified_count + 1
+        vim.notify("Modified " .. file, vim.log.levels.INFO)
+      end
+    end
+
+    if modified_count > 0 then
+      vim.notify(string.format("Modified %d files", modified_count), vim.log.levels.INFO)
+    else
+      vim.notify("No files were modified", vim.log.levels.WARN)
+    end
+    vim.cmd('edit')
+  end, {})
 end
 
 function M.setup(opts)
@@ -208,30 +313,56 @@ return M
 
 --local M = {}
 
---local function get_module_name(registry_source)
---local module_name = registry_source:match("^[^/]+/([^/]+)/")
---if not module_name then
---error("Invalid registry source format: " .. registry_source)
+--local namespace
+
+--local function get_module_config()
+--if not namespace then
+--error("Namespace is not set. Please provide a namespace in the setup configuration.")
 --end
+
+--local handle = io.popen("basename `git rev-parse --show-toplevel`")
+--if not handle then
+--error("Failed to execute git command to get repository name")
+--end
+
+--local repo_name = handle:read("*a")
+--handle:close()
+--if not repo_name then
+--error("Failed to read repository name from git command")
+--end
+
+--repo_name = repo_name:gsub("%s+", "") -- Remove any whitespace
+
+---- Assuming repo_name is in the format "terraform-<provider>-<module>"
+--local provider, module_name = repo_name:match("^terraform%-(.+)%-(.+)$")
+--if not (provider and module_name) then
+--error("Could not extract provider and module from repository name: " .. repo_name)
+--end
+
+--local registry_source = namespace .. "/" .. module_name .. "/" .. provider
+
 --return {
---module_name:lower(),
---module_name:sub(1, 1):upper() .. module_name:sub(2),
+--registry_source = registry_source,
+--module_name = module_name,
+--provider = provider,
+--namespace = namespace
 --}
 --end
 
 --local function get_latest_major_version(registry_source)
 --local plenary_http = require("plenary.curl")
 
---local namespace, name, provider = registry_source:match("^([^/]+)/([^/]+)/([^/]+)$")
---if not (namespace and name and provider) then
+---- Renamed 'namespace' to 'ns' to avoid scope conflict
+--local ns, module_name, provider = registry_source:match("^([^/]+)/([^/]+)/([^/]+)$")
+--if not (ns and module_name and provider) then
 --vim.notify("Invalid registry source format: " .. registry_source, vim.log.levels.ERROR)
 --return nil
 --end
 
 --local registry_url = string.format(
 --"https://registry.terraform.io/v1/modules/%s/%s/%s/versions",
---namespace,
---name,
+--ns,
+--module_name,
 --provider
 --)
 
@@ -331,11 +462,9 @@ return M
 --return false
 --end
 
---local function create_module_commands(_, module_config)
---local module_names = get_module_name(module_config.registry_source)
-
---for _, name in ipairs(module_names) do
---vim.api.nvim_create_user_command("Bounce" .. name .. "ToLocal", function()
+--local function create_commands()
+--vim.api.nvim_create_user_command("BounceModuleToLocal", function()
+--local module_config = get_module_config()
 --local find_cmd = "find . -name main.tf"
 --local files = vim.fn.systemlist(find_cmd)
 
@@ -355,7 +484,8 @@ return M
 --vim.cmd('edit')
 --end, {})
 
---vim.api.nvim_create_user_command("Bounce" .. name .. "ToRegistry", function()
+--vim.api.nvim_create_user_command("BounceModuleToRegistry", function()
+--local module_config = get_module_config()
 --local find_cmd = "find . -name main.tf"
 --local files = vim.fn.systemlist(find_cmd)
 
@@ -375,12 +505,15 @@ return M
 --vim.cmd('edit')
 --end, {})
 --end
---end
 
 --function M.setup(opts)
---for _, module_config in pairs(opts) do
---create_module_commands(_, module_config)
+--opts = opts or {}
+--if opts.namespace then
+--namespace = opts.namespace
+--else
+--error("Namespace is required. Please provide a namespace in the setup configuration.")
 --end
+--create_commands()
 --end
 
 --return M
