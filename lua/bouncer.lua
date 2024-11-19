@@ -36,6 +36,29 @@ local function get_module_config()
   }
 end
 
+-- Function to parse version strings into numeric components
+local function parse_version(version_str)
+  local major, minor, patch = version_str:match("^(%d+)%.(%d+)%.?(%d*)")
+  major = tonumber(major)
+  minor = tonumber(minor)
+  patch = tonumber(patch) or 0
+  return major, minor, patch
+end
+
+-- Function to compare two versions numerically
+local function is_version_greater(v1, v2)
+  local major1, minor1, patch1 = parse_version(v1)
+  local major2, minor2, patch2 = parse_version(v2)
+
+  if major1 ~= major2 then
+    return major1 > major2
+  elseif minor1 ~= minor2 then
+    return minor1 > minor2
+  else
+    return patch1 > patch2
+  end
+end
+
 local function get_latest_version_info(registry_source)
   local plenary_http = require("plenary.curl")
 
@@ -60,10 +83,10 @@ local function get_latest_version_info(registry_source)
   if result and result.status == 200 and result.body then
     local data = vim.fn.json_decode(result.body)
     if data and data.modules and data.modules[1] and data.modules[1].versions then
-      -- Find the latest version
+      -- Find the latest version numerically
       local latest_version = nil
       for _, version_info in ipairs(data.modules[1].versions) do
-        if not latest_version or version_info.version > latest_version then
+        if not latest_version or is_version_greater(version_info.version, latest_version) then
           latest_version = version_info.version
         end
       end
@@ -107,7 +130,7 @@ local function process_file(file_path, module_config, is_local)
         block_indent = module_match
         local next_line = lines[i + 1]
         if next_line:match('source%s*=%s*"' .. module_config.registry_source .. '"') or
-            next_line:match('source%s*=%s*"../../"') then
+           next_line:match('source%s*=%s*"../../"') then
           in_module_block = true
         end
       end
@@ -127,12 +150,9 @@ local function process_file(file_path, module_config, is_local)
               if latest_version then
                 local new_version_constraint
                 if latest_major == 0 then
-                  local latest_minor = latest_version:match("^%d+%.(%d+)")
-                  if latest_minor then
-                    new_version_constraint = "~> 0." .. latest_minor
-                  else
-                    new_version_constraint = "~> 0.0"
-                  end
+                  -- For major version 0, include minor version in constraint
+                  local _, latest_minor = parse_version(latest_version)
+                  new_version_constraint = "~> 0." .. latest_minor
                 else
                   new_version_constraint = "~> " .. latest_major .. ".0"
                 end
@@ -220,9 +240,7 @@ local function process_file_for_all_modules(file_path)
                 local existing_major, existing_minor = existing_version:match("~>%s*(%d+)%.(%d+)")
                 existing_major = tonumber(existing_major)
                 existing_minor = tonumber(existing_minor)
-                local latest_major_version, latest_minor_version = latest_version:match("(%d+)%.(%d+)")
-                latest_major_version = tonumber(latest_major_version)
-                latest_minor_version = tonumber(latest_minor_version)
+                local latest_major_version, latest_minor_version = parse_version(latest_version)
 
                 if existing_major == latest_major_version then
                   if latest_major_version == 0 then
@@ -244,30 +262,23 @@ local function process_file_for_all_modules(file_path)
                 local new_version_constraint
                 if latest_major == 0 then
                   -- For major version 0, include minor version in constraint
-                  local latest_minor = latest_version:match("^%d+%.(%d+)")
-                  if latest_minor then
-                    new_version_constraint = "~> 0." .. latest_minor
-                  else
-                    new_version_constraint = "~> 0.0"
-                  end
+                  local _, latest_minor = parse_version(latest_version)
+                  new_version_constraint = "~> 0." .. latest_minor
                 else
                   new_version_constraint = "~> " .. latest_major .. ".0"
                 end
 
                 if version_line_index then
                   -- Update existing version line
-                  new_lines[version_line_index] = string.format('%s  version = "%s"', block_indent,
-                    new_version_constraint)
+                  new_lines[version_line_index] = string.format('%s  version = "%s"', block_indent, new_version_constraint)
                 else
                   -- Add version line after source line
-                  table.insert(new_lines, source_line_index + 1,
-                    string.format('%s  version = "%s"', block_indent, new_version_constraint))
+                  table.insert(new_lines, source_line_index + 1, string.format('%s  version = "%s"', block_indent, new_version_constraint))
                 end
                 modified = true
               end
             else
-              vim.notify("Could not fetch latest version for module '" .. current_module_name .. "'", vim.log.levels
-              .WARN)
+              vim.notify("Could not fetch latest version for module '" .. current_module_name .. "'", vim.log.levels.WARN)
             end
           end
         end
@@ -374,7 +385,6 @@ function M.setup(opts)
 end
 
 return M
-
 
 --local M = {}
 
