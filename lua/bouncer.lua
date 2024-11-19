@@ -39,7 +39,10 @@ end
 local function get_latest_major_version(registry_source)
   local plenary_http = require("plenary.curl")
 
-  local ns, module_name, provider = registry_source:match("^([^/]+)/([^/]+)/([^/]+)$")
+  -- Remove any subdirectory from the registry_source
+  local source_no_subdir = registry_source:match("^(.-)//") or registry_source
+
+  local ns, module_name, provider = source_no_subdir:match("^([^/]+)/([^/]+)/([^/]+)$")
   if not (ns and module_name and provider) then
     vim.notify("Invalid registry source format: " .. registry_source, vim.log.levels.ERROR)
     return nil
@@ -94,13 +97,13 @@ local function process_file(file_path, module_config, is_local)
   local new_lines = {}
   local block_indent = ""
 
-  for _, line in ipairs(lines) do
+  for i, line in ipairs(lines) do
     if not in_module_block then
       table.insert(new_lines, line)
       local module_match = line:match('(%s*)module%s*"[^"]*"%s*{')
-      if module_match and lines[_ + 1] then
+      if module_match and lines[i + 1] then
         block_indent = module_match
-        local next_line = lines[_ + 1]
+        local next_line = lines[i + 1]
         if next_line:match('source%s*=%s*"' .. module_config.registry_source .. '"') or
             next_line:match('source%s*=%s*"../../"') then
           in_module_block = true
