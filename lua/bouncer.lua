@@ -36,7 +36,7 @@ local function get_module_config()
   }
 end
 
-local function get_latest_major_version(registry_source)
+local function get_latest_version_info(registry_source)
   local plenary_http = require("plenary.curl")
 
   -- Remove any subdirectory from the registry_source
@@ -45,7 +45,7 @@ local function get_latest_major_version(registry_source)
   local ns, module_name, provider = source_no_subdir:match("^([^/]+)/([^/]+)/([^/]+)$")
   if not (ns and module_name and provider) then
     vim.notify("Invalid registry source format: " .. registry_source, vim.log.levels.ERROR)
-    return nil
+    return nil, nil
   end
 
   local registry_url = string.format(
@@ -60,19 +60,21 @@ local function get_latest_major_version(registry_source)
   if result and result.status == 200 and result.body then
     local data = vim.fn.json_decode(result.body)
     if data and data.modules and data.modules[1] and data.modules[1].versions then
-      local latest_major_version = nil
+      -- Find the latest version
+      local latest_version = nil
       for _, version_info in ipairs(data.modules[1].versions) do
-        local major = version_info.version:match("^(%d+)")
-        if major then
-          major = tonumber(major)
-          if not latest_major_version or major > latest_major_version then
-            latest_major_version = major
-          end
+        if not latest_version or version_info.version > latest_version then
+          latest_version = version_info.version
         end
       end
 
-      if latest_major_version then
-        return "~> " .. latest_major_version .. ".0"
+      if latest_version then
+        -- Return the latest version and the major version number
+        local major_version = latest_version:match("^(%d+)")
+        if major_version then
+          major_version = tonumber(major_version)
+          return latest_version, major_version
+        end
       end
     end
   else
@@ -82,7 +84,7 @@ local function get_latest_major_version(registry_source)
     )
   end
 
-  return nil
+  return nil, nil
 end
 
 local function process_file(file_path, module_config, is_local)
@@ -121,9 +123,20 @@ local function process_file(file_path, module_config, is_local)
               table.insert(new_lines, block_indent .. '  source = "../../"')
             else
               table.insert(new_lines, string.format('%s  source  = "%s"', block_indent, module_config.registry_source))
-              local latest_version_constraint = get_latest_major_version(module_config.registry_source)
-              if latest_version_constraint then
-                table.insert(new_lines, string.format('%s  version = "%s"', block_indent, latest_version_constraint))
+              local latest_version, latest_major = get_latest_version_info(module_config.registry_source)
+              if latest_version then
+                local new_version_constraint
+                if latest_major == 0 then
+                  local latest_minor = latest_version:match("^%d+%.(%d+)")
+                  if latest_minor then
+                    new_version_constraint = "~> 0." .. latest_minor
+                  else
+                    new_version_constraint = "~> 0.0"
+                  end
+                else
+                  new_version_constraint = "~> " .. latest_major .. ".0"
+                end
+                table.insert(new_lines, string.format('%s  version = "%s"', block_indent, new_version_constraint))
               end
             end
             modified = true
@@ -166,6 +179,7 @@ local function process_file_for_all_modules(file_path)
   local source_line_index = nil
   local version_line_index = nil
   local source_line = nil
+  local version_line = nil
 
   for _, line in ipairs(lines) do
     table.insert(new_lines, line)
@@ -179,6 +193,7 @@ local function process_file_for_all_modules(file_path)
         source_line_index = nil
         version_line_index = nil
         source_line = nil
+        version_line = nil
       end
     else
       if line:match('^' .. block_indent .. '}') then
@@ -192,18 +207,64 @@ local function process_file_for_all_modules(file_path)
               -- Skip local modules
               goto continue
             end
-            local latest_version_constraint = get_latest_major_version(registry_source)
-            if latest_version_constraint then
-              if version_line_index then
-                -- Update existing version line
-                new_lines[version_line_index] = string.format('%s  version = "%s"', block_indent,
-                  latest_version_constraint)
-              else
-                -- Add version line after source line
-                table.insert(new_lines, source_line_index + 1,
-                  string.format('%s  version = "%s"', block_indent, latest_version_constraint))
+            local latest_version, latest_major = get_latest_version_info(registry_source)
+            if latest_version then
+              -- Parse existing version constraint
+              local existing_version = nil
+              if version_line and version_line:match('version%s*=%s*"(.-)"') then
+                existing_version = version_line:match('version%s*=%s*"(.-)"')
               end
-              modified = true
+
+              local update_version = true
+              if existing_version then
+                local existing_major, existing_minor = existing_version:match("~>%s*(%d+)%.(%d+)")
+                existing_major = tonumber(existing_major)
+                existing_minor = tonumber(existing_minor)
+                local latest_major_version, latest_minor_version = latest_version:match("(%d+)%.(%d+)")
+                latest_major_version = tonumber(latest_major_version)
+                latest_minor_version = tonumber(latest_minor_version)
+
+                if existing_major == latest_major_version then
+                  if latest_major_version == 0 then
+                    -- For major version 0, compare minor versions
+                    if existing_minor and latest_minor_version and existing_minor >= latest_minor_version then
+                      update_version = false
+                    end
+                  else
+                    -- For major versions > 0, no need to update if majors are equal
+                    update_version = false
+                  end
+                elseif existing_major > latest_major_version then
+                  -- Existing major version is higher, do not update
+                  update_version = false
+                end
+              end
+
+              if update_version then
+                local new_version_constraint
+                if latest_major == 0 then
+                  -- For major version 0, include minor version in constraint
+                  local latest_minor = latest_version:match("^%d+%.(%d+)")
+                  if latest_minor then
+                    new_version_constraint = "~> 0." .. latest_minor
+                  else
+                    new_version_constraint = "~> 0.0"
+                  end
+                else
+                  new_version_constraint = "~> " .. latest_major .. ".0"
+                end
+
+                if version_line_index then
+                  -- Update existing version line
+                  new_lines[version_line_index] = string.format('%s  version = "%s"', block_indent,
+                    new_version_constraint)
+                else
+                  -- Add version line after source line
+                  table.insert(new_lines, source_line_index + 1,
+                    string.format('%s  version = "%s"', block_indent, new_version_constraint))
+                end
+                modified = true
+              end
             else
               vim.notify("Could not fetch latest version for module '" .. current_module_name .. "'", vim.log.levels
               .WARN)
@@ -219,6 +280,7 @@ local function process_file_for_all_modules(file_path)
             source_line = line
           elseif line:match('%s*version%s*=') then
             version_line_index = #new_lines
+            version_line = line
           end
         end
       end
