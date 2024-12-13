@@ -1,9 +1,8 @@
 local M = {}
 
--- Enhanced caching with multiple namespaces
+-- Cache for module configurations to avoid repeated git commands
 local config_cache = {}
-local namespaces = {}
-local namespace -- Primary namespace for BounceModuleToLocal/Registry
+local namespace
 
 -- Pre-compile patterns for better performance
 local patterns = {
@@ -13,7 +12,7 @@ local patterns = {
   version_constraint = "~>%s*(%d+)%.(%d+)",
 }
 
--- Memoized version parsing with single table lookup
+-- Memoized version parsing
 local version_cache = {}
 local function parse_version(version_str)
   if version_cache[version_str] then
@@ -26,11 +25,11 @@ local function parse_version(version_str)
   minor = tonumber(minor)
   patch = tonumber(patch) or 0
 
-  version_cache[version_str] = { major, minor, patch }
+  version_cache[version_str] = {major, minor, patch}
   return major, minor, patch
 end
 
--- Fast version comparison
+-- Function to compare versions numerically
 local function is_version_greater(v1, v2)
   local major1, minor1, patch1 = parse_version(v1)
   local major2, minor2, patch2 = parse_version(v2)
@@ -46,7 +45,7 @@ end
 
 local function get_module_config()
   if not namespace then
-    error("Primary namespace is not set. Please provide namespaces in the setup configuration.")
+    error("Namespace is not set. Please provide a namespace in the setup configuration.")
   end
 
   -- Check cache first
@@ -86,26 +85,12 @@ local function get_latest_version_info(registry_source)
     return cached[1], cached[2]
   end
 
-  -- For registry sources like "cloudnationhq/naming/azure"
-  local source_no_subdir = registry_source:match("^([^/]+/[^/]+/[^/]+)")
+  local plenary_http = require("plenary.curl")
+  local source_no_subdir = registry_source:match("^(.-)//") or registry_source
   local ns, module_name, provider = source_no_subdir:match("^([^/]+)/([^/]+)/([^/]+)$")
 
   if not (ns and module_name and provider) then
     vim.notify("Invalid registry source format: " .. registry_source, vim.log.levels.ERROR)
-    return nil, nil
-  end
-
-  -- Verify namespace is known (for BounceModulesToRegistry)
-  local is_known_namespace = false
-  for _, known_ns in ipairs(namespaces) do
-    if ns == known_ns then
-      is_known_namespace = true
-      break
-    end
-  end
-
-  if not is_known_namespace then
-    vim.notify("Skipping unknown namespace: " .. ns, vim.log.levels.WARN)
     return nil, nil
   end
 
@@ -114,7 +99,7 @@ local function get_latest_version_info(registry_source)
     ns, module_name, provider
   )
 
-  local result = require("plenary.curl").get({
+  local result = plenary_http.get({
     url = registry_url,
     accept = "application/json",
     timeout = 5000
@@ -133,7 +118,7 @@ local function get_latest_version_info(registry_source)
       if latest_version then
         local major_version = tonumber(latest_version:match("^(%d+)"))
         if major_version then
-          registry_version_cache[registry_source] = { latest_version, major_version }
+          registry_version_cache[registry_source] = {latest_version, major_version}
           return latest_version, major_version
         end
       end
@@ -149,7 +134,7 @@ local function get_latest_version_info(registry_source)
 end
 
 local function find_terraform_files()
-  -- Try fd first (faster)
+  -- Try fd first
   local fd_cmd = "fd -t f main.tf"
   local files = vim.fn.systemlist(fd_cmd)
 
@@ -282,7 +267,6 @@ local function process_file_for_all_modules(file_path)
               goto continue
             end
 
-            -- Try to get the main registry part before any submodule path
             local registry_source = source_value:match("^([^/]+/[^/]+/[^/]+)")
             if registry_source then
               local latest_version, latest_major = get_latest_version_info(registry_source)
@@ -409,7 +393,7 @@ local function create_commands()
         vim.notify("No Terraform files found", vim.log.levels.WARN)
         return
       end
-      process_files_parallel(files, process_file, { module_config = module_config, is_local = true })
+      process_files_parallel(files, process_file, {module_config = module_config, is_local = true})
     end,
 
     BounceModuleToRegistry = function()
@@ -424,7 +408,7 @@ local function create_commands()
         vim.notify("No Terraform files found", vim.log.levels.WARN)
         return
       end
-      process_files_parallel(files, process_file, { module_config = module_config, is_local = false })
+      process_files_parallel(files, process_file, {module_config = module_config, is_local = false})
     end,
 
     BounceModulesToRegistry = function()
@@ -444,20 +428,15 @@ end
 
 function M.setup(opts)
   opts = opts or {}
-  if not opts.namespaces or type(opts.namespaces) ~= "table" or #opts.namespaces == 0 then
-    error("At least one namespace is required. Please provide namespaces in the setup configuration.")
+  if not opts.namespace then
+    error("Namespace is required. Please provide a namespace in the setup configuration.")
   end
 
-  -- Store all namespaces for registry checks
-  namespaces = opts.namespaces
-  -- Use first namespace as primary for BounceModuleToLocal/Registry
-  namespace = opts.namespaces[1]
-
+  namespace = opts.namespace
   create_commands()
 end
 
 return M
-
 
 -- local M = {}
 --
