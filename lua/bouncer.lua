@@ -150,22 +150,27 @@ local function process_file(file_path, module_config, is_local)
   local modified = false
   local in_module_block = false
   local new_lines = {}
-  local block_indent = ""
   local source_added = false
+  local block_indent = ""
 
   for i, line in ipairs(lines) do
+    -- Strip all whitespace for pattern matching but keep original line
+    local stripped = line:gsub("^%s*", ""):gsub("%s*$", "")
+
     if not in_module_block then
       table.insert(new_lines, line)
       local module_match = line:match(patterns.module_block)
       if module_match and lines[i + 1] then
-        if lines[i + 1]:match('source%s*=%s*"' .. module_config.registry_source .. '"') or
-           lines[i + 1]:match('source%s*=%s*"../../"') then
+        block_indent = module_match
+        -- Check next line without considering whitespace
+        local next_stripped = lines[i + 1]:gsub("^%s*", ""):gsub("%s*$", "")
+        if next_stripped:match('source%s*=%s*"' .. module_config.registry_source .. '"') or
+           next_stripped:match('source%s*=%s*"../../"') then
           in_module_block = true
-          block_indent = module_match
           source_added = false
         end
       end
-    elseif line:match('^' .. block_indent .. '}') then
+    elseif stripped:match('^}') then
       if not source_added then
         if is_local then
           table.insert(new_lines, block_indent .. '  source = "../../"')
@@ -185,30 +190,25 @@ local function process_file(file_path, module_config, is_local)
       source_added = false
       table.insert(new_lines, line)
     else
-      local line_indent = line:match('^(%s*)')
-      if line_indent == block_indent .. '  ' then
-        if line:match('%s*source%s*=') then
-          if not source_added then
-            if is_local then
-              table.insert(new_lines, block_indent .. '  source = "../../"')
-            else
-              table.insert(new_lines, string.format('%s  source  = "%s"', block_indent, module_config.registry_source))
-              local latest_version, latest_major = get_latest_version_info(module_config.registry_source)
-              if latest_version then
-                local new_version_constraint = latest_major == 0
-                  and "~> 0." .. select(2, parse_version(latest_version))
-                  or "~> " .. latest_major .. ".0"
-                table.insert(new_lines, string.format('%s  version = "%s"', block_indent, new_version_constraint))
-              end
+      if stripped:match('^source%s*=') then
+        if not source_added then
+          if is_local then
+            table.insert(new_lines, block_indent .. '  source = "../../"')
+          else
+            table.insert(new_lines, string.format('%s  source  = "%s"', block_indent, module_config.registry_source))
+            local latest_version, latest_major = get_latest_version_info(module_config.registry_source)
+            if latest_version then
+              local new_version_constraint = latest_major == 0
+                and "~> 0." .. select(2, parse_version(latest_version))
+                or "~> " .. latest_major .. ".0"
+              table.insert(new_lines, string.format('%s  version = "%s"', block_indent, new_version_constraint))
             end
-            source_added = true
-            modified = true
           end
-          -- Skip this line since we've handled the source
-        elseif not line:match('%s*version%s*=') then
-          table.insert(new_lines, line)
+          source_added = true
+          modified = true
         end
-      else
+        -- Skip this line as we're replacing all source lines
+      elseif not stripped:match('^version%s*=') then
         table.insert(new_lines, line)
       end
     end
