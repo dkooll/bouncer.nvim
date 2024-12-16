@@ -385,94 +385,160 @@ end
 
 local function process_file_for_all_modules(file_path)
   local lines = vim.fn.readfile(file_path)
-  if not lines then
-    vim.notify("Failed to read file: " .. file_path, vim.log.levels.ERROR)
-    return false
-  end
+  if not lines then return false end
 
-  local modified = false
-  local in_module_block = false
   local new_lines = {}
+  local in_module_block = false
   local block_indent = ""
-  local active_source = nil
-  local has_active_source = false
+  local modified = false
+  local found_commented_registry = nil
+  local found_source = false
 
   for _, line in ipairs(lines) do
-    local stripped = line:gsub("^%s*", ""):gsub("%s*$", "")
+    local stripped = line:gsub("^%s*", "")
 
     if not in_module_block then
       table.insert(new_lines, line)
-      local module_match = line:match(patterns.module_block)
-      if module_match then
+      if stripped:match("^module%s*\"[^\"]*\"%s*{") then
         in_module_block = true
-        block_indent = module_match
-        active_source = nil
-        has_active_source = false
+        block_indent = line:match("^(%s*)")
+        found_commented_registry = nil
+        found_source = false
       end
-      goto continue
-    end
-
-    if stripped:match("^}") then
+    elseif stripped:match("^}") then
       in_module_block = false
-      active_source = nil
-      has_active_source = false
       table.insert(new_lines, line)
-      goto continue
-    end
-
-    -- Handle commented lines
-    if stripped:match("^#") then
-      table.insert(new_lines, line)
-      goto continue
-    end
-
-    if stripped:match("^source%s*=") then
-      local source = stripped:match('source%s*=%s*"([^"]+)"')
-      if source then
-        if not has_active_source then
-          active_source = source
-          has_active_source = true
-          table.insert(new_lines, line)
-
-          if source:match("^" .. namespace .. "/") then
-            local latest_version, latest_major = get_latest_version_info(source)
-            if latest_version then
-              local new_version_constraint = latest_major == 0
-                and "~> 0." .. select(2, parse_version(latest_version))
-                or "~> " .. latest_major .. ".0"
-              table.insert(new_lines, string.format('%s  version = "%s"', block_indent, new_version_constraint))
-              modified = true
-            end
-          end
-        end
-      else
-        table.insert(new_lines, line)
-      end
-      goto continue
-    end
-
-    if stripped:match("^version%s*=") then
-      if active_source and active_source:match("^" .. namespace .. "/") then
-        -- Skip version line if we have an active namespace source
+    else
+      -- Check for commented registry source
+      local commented_source = stripped:match("^#%s*source%s*=%s*\"(" .. namespace .. "[^\"]+)\"")
+      if commented_source then
+        found_commented_registry = { source = commented_source, line = line }
         goto continue
       end
-    end
 
-    table.insert(new_lines, line)
-    ::continue::
+      -- Check for local source
+      if stripped:match("^source%s*=%s*\"../../\"") then
+        if found_commented_registry then
+          -- Use the registry source instead
+          table.insert(new_lines, block_indent .. '  source  = "' .. found_commented_registry.source .. '"')
+          local latest_version, latest_major = get_latest_version_info(found_commented_registry.source)
+          if latest_version then
+            local new_version_constraint = latest_major == 0
+              and "~> 0." .. select(2, parse_version(latest_version))
+              or "~> " .. latest_major .. ".0"
+            table.insert(new_lines, string.format('%s  version = "%s"', block_indent, new_version_constraint))
+          end
+          found_source = true
+          modified = true
+          goto continue
+        end
+      end
+
+      -- Keep other lines but skip version lines if we handled the registry source
+      if not (found_source and stripped:match("^#?%s*version%s*=")) then
+        table.insert(new_lines, line)
+      end
+
+      ::continue::
+    end
   end
 
   if modified then
-    if vim.fn.writefile(new_lines, file_path) == -1 then
-      vim.notify("Failed to write file: " .. file_path, vim.log.levels.ERROR)
-      return false
-    end
-    return true
+    return vim.fn.writefile(new_lines, file_path) ~= -1
   end
-
   return false
 end
 
+-- local function process_file_for_all_modules(file_path)
+--   local lines = vim.fn.readfile(file_path)
+--   if not lines then
+--     vim.notify("Failed to read file: " .. file_path, vim.log.levels.ERROR)
+--     return false
+--   end
+--
+--   local modified = false
+--   local in_module_block = false
+--   local new_lines = {}
+--   local block_indent = ""
+--   local active_source = nil
+--   local has_active_source = false
+--
+--   for _, line in ipairs(lines) do
+--     local stripped = line:gsub("^%s*", ""):gsub("%s*$", "")
+--
+--     if not in_module_block then
+--       table.insert(new_lines, line)
+--       local module_match = line:match(patterns.module_block)
+--       if module_match then
+--         in_module_block = true
+--         block_indent = module_match
+--         active_source = nil
+--         has_active_source = false
+--       end
+--       goto continue
+--     end
+--
+--     if stripped:match("^}") then
+--       in_module_block = false
+--       active_source = nil
+--       has_active_source = false
+--       table.insert(new_lines, line)
+--       goto continue
+--     end
+--
+--     -- Handle commented lines
+--     if stripped:match("^#") then
+--       table.insert(new_lines, line)
+--       goto continue
+--     end
+--
+--     if stripped:match("^source%s*=") then
+--       local source = stripped:match('source%s*=%s*"([^"]+)"')
+--       if source then
+--         if not has_active_source then
+--           active_source = source
+--           has_active_source = true
+--           table.insert(new_lines, line)
+--
+--           if source:match("^" .. namespace .. "/") then
+--             local latest_version, latest_major = get_latest_version_info(source)
+--             if latest_version then
+--               local new_version_constraint = latest_major == 0
+--                 and "~> 0." .. select(2, parse_version(latest_version))
+--                 or "~> " .. latest_major .. ".0"
+--               table.insert(new_lines, string.format('%s  version = "%s"', block_indent, new_version_constraint))
+--               modified = true
+--             end
+--           end
+--         end
+--       else
+--         table.insert(new_lines, line)
+--       end
+--       goto continue
+--     end
+--
+--     if stripped:match("^version%s*=") then
+--       if active_source and active_source:match("^" .. namespace .. "/") then
+--         -- Skip version line if we have an active namespace source
+--         goto continue
+--       end
+--     end
+--
+--     table.insert(new_lines, line)
+--     ::continue::
+--   end
+--
+--   if modified then
+--     if vim.fn.writefile(new_lines, file_path) == -1 then
+--       vim.notify("Failed to write file: " .. file_path, vim.log.levels.ERROR)
+--       return false
+--     end
+--     return true
+--   end
+--
+--   return false
+-- end
+--
 -- local function process_file_for_all_modules(file_path)
 --   local lines = vim.fn.readfile(file_path)
 --   if not lines then
