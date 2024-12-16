@@ -392,6 +392,7 @@ local function process_file_for_all_modules(file_path)
   local block_indent = ""
   local modified = false
   local found_registry = nil
+  local registry_version = nil
 
   for _, line in ipairs(lines) do
     local stripped = line:gsub("^%s*", "")
@@ -402,40 +403,48 @@ local function process_file_for_all_modules(file_path)
         in_module_block = true
         block_indent = line:match("^(%s*)")
         found_registry = nil
+        registry_version = nil
       end
     elseif stripped:match("^}") then
       in_module_block = false
       table.insert(new_lines, line)
     else
-      -- Check for registry source (commented or not)
+      -- Check for registry source and version (commented or not)
       local registry_source = stripped:match("^#?%s*source%s*=%s*\"(" .. namespace .. "[^\"]+)\"")
+      local version = stripped:match("^#?%s*version%s*=%s*\"([^\"]+)\"")
+
       if registry_source then
         found_registry = registry_source
+        goto continue
+      elseif version and not registry_version then
+        registry_version = version
         goto continue
       end
 
       -- Check for local source
       if stripped:match("^source%s*=%s*\"../../\"") and found_registry then
-        -- Use the registry source
+        -- Add the registry source and version
         table.insert(new_lines, block_indent .. '  source  = "' .. found_registry .. '"')
-        local latest_version, latest_major = get_latest_version_info(found_registry)
-        if latest_version then
-          local new_version_constraint = latest_major == 0
-            and "~> 0." .. select(2, parse_version(latest_version))
-            or "~> " .. latest_major .. ".0"
-          table.insert(new_lines, string.format('%s  version = "%s"', block_indent, new_version_constraint))
+
+        -- Only get latest version if we didn't find a version in comments
+        if not registry_version then
+          local latest_version, latest_major = get_latest_version_info(found_registry)
+          if latest_version then
+            registry_version = latest_major == 0
+              and "~> 0." .. select(2, parse_version(latest_version))
+              or "~> " .. latest_major .. ".0"
+          end
+        end
+
+        if registry_version then
+          table.insert(new_lines, string.format('%s  version = "%s"', block_indent, registry_version))
         end
         modified = true
         goto continue
       end
 
-      -- Skip any version lines in this block
-      if stripped:match("^#?%s*version%s*=") then
-        goto continue
-      end
-
-      -- Add non-source/version lines
-      if not stripped:match("^#?%s*source%s*=") then
+      -- Skip any source/version lines
+      if not (stripped:match("^#?%s*source%s*=") or stripped:match("^#?%s*version%s*=")) then
         table.insert(new_lines, line)
       end
 
@@ -448,6 +457,72 @@ local function process_file_for_all_modules(file_path)
   end
   return false
 end
+
+-- local function process_file_for_all_modules(file_path)
+--   local lines = vim.fn.readfile(file_path)
+--   if not lines then return false end
+--
+--   local new_lines = {}
+--   local in_module_block = false
+--   local block_indent = ""
+--   local modified = false
+--   local found_registry = nil
+--
+--   for _, line in ipairs(lines) do
+--     local stripped = line:gsub("^%s*", "")
+--
+--     if not in_module_block then
+--       table.insert(new_lines, line)
+--       if stripped:match("^module%s*\"[^\"]*\"%s*{") then
+--         in_module_block = true
+--         block_indent = line:match("^(%s*)")
+--         found_registry = nil
+--       end
+--     elseif stripped:match("^}") then
+--       in_module_block = false
+--       table.insert(new_lines, line)
+--     else
+--       -- Check for registry source (commented or not)
+--       local registry_source = stripped:match("^#?%s*source%s*=%s*\"(" .. namespace .. "[^\"]+)\"")
+--       if registry_source then
+--         found_registry = registry_source
+--         goto continue
+--       end
+--
+--       -- Check for local source
+--       if stripped:match("^source%s*=%s*\"../../\"") and found_registry then
+--         -- Use the registry source
+--         table.insert(new_lines, block_indent .. '  source  = "' .. found_registry .. '"')
+--         local latest_version, latest_major = get_latest_version_info(found_registry)
+--         if latest_version then
+--           local new_version_constraint = latest_major == 0
+--             and "~> 0." .. select(2, parse_version(latest_version))
+--             or "~> " .. latest_major .. ".0"
+--           table.insert(new_lines, string.format('%s  version = "%s"', block_indent, new_version_constraint))
+--         end
+--         modified = true
+--         goto continue
+--       end
+--
+--       -- Skip any version lines in this block
+--       if stripped:match("^#?%s*version%s*=") then
+--         goto continue
+--       end
+--
+--       -- Add non-source/version lines
+--       if not stripped:match("^#?%s*source%s*=") then
+--         table.insert(new_lines, line)
+--       end
+--
+--       ::continue::
+--     end
+--   end
+--
+--   if modified then
+--     return vim.fn.writefile(new_lines, file_path) ~= -1
+--   end
+--   return false
+-- end
 
 -- local function process_file_for_all_modules(file_path)
 --   local lines = vim.fn.readfile(file_path)
