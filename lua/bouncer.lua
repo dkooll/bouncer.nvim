@@ -323,9 +323,11 @@ local function process_file_for_all_modules(file_path)
   local new_lines = {}
   local block_indent = ""
   local active_source = nil
+  local has_active_source = false
 
   for _, line in ipairs(lines) do
-    -- Check for module block start
+    local stripped = line:gsub("^%s*", ""):gsub("%s*$", "")
+
     if not in_module_block then
       table.insert(new_lines, line)
       local module_match = line:match(patterns.module_block)
@@ -333,40 +335,42 @@ local function process_file_for_all_modules(file_path)
         in_module_block = true
         block_indent = module_match
         active_source = nil
+        has_active_source = false
       end
       goto continue
     end
 
-    -- Check for module block end
-    if line:match('^' .. block_indent .. '}') then
+    if stripped:match("^}") then
       in_module_block = false
+      active_source = nil
+      has_active_source = false
       table.insert(new_lines, line)
       goto continue
     end
 
-    -- Process module block content
-    local line_indent = line:match('^(%s*)')
-    if line_indent ~= block_indent .. '  ' then
+    -- Handle commented lines
+    if stripped:match("^#") then
       table.insert(new_lines, line)
       goto continue
     end
 
-    -- Handle source lines
-    if line:match('%s*source%s*=') and not line:match('^%s*#') then
-      local source = line:match('source%s*=%s*"([^"]+)"')
+    if stripped:match("^source%s*=") then
+      local source = stripped:match('source%s*=%s*"([^"]+)"')
       if source then
-        active_source = source
-        table.insert(new_lines, line)
+        if not has_active_source then
+          active_source = source
+          has_active_source = true
+          table.insert(new_lines, line)
 
-        if source:match("^" .. namespace .. "/") then
-          local latest_version, latest_major = get_latest_version_info(source)
-          if latest_version then
-            local new_version_constraint = latest_major == 0
+          if source:match("^" .. namespace .. "/") then
+            local latest_version, latest_major = get_latest_version_info(source)
+            if latest_version then
+              local new_version_constraint = latest_major == 0
                 and "~> 0." .. select(2, parse_version(latest_version))
                 or "~> " .. latest_major .. ".0"
-
-            table.insert(new_lines, string.format('%s  version = "%s"', block_indent, new_version_constraint))
-            modified = true
+              table.insert(new_lines, string.format('%s  version = "%s"', block_indent, new_version_constraint))
+              modified = true
+            end
           end
         end
       else
@@ -375,17 +379,14 @@ local function process_file_for_all_modules(file_path)
       goto continue
     end
 
-    -- Handle version lines
-    if line:match('%s*version%s*=') and not line:match('^%s*#') then
-      if not active_source or not active_source:match("^" .. namespace .. "/") then
-        table.insert(new_lines, line)
+    if stripped:match("^version%s*=") then
+      if active_source and active_source:match("^" .. namespace .. "/") then
+        -- Skip version line if we have an active namespace source
+        goto continue
       end
-      goto continue
     end
 
-    -- Keep all other lines
     table.insert(new_lines, line)
-
     ::continue::
   end
 
@@ -399,6 +400,95 @@ local function process_file_for_all_modules(file_path)
 
   return false
 end
+
+-- local function process_file_for_all_modules(file_path)
+--   local lines = vim.fn.readfile(file_path)
+--   if not lines then
+--     vim.notify("Failed to read file: " .. file_path, vim.log.levels.ERROR)
+--     return false
+--   end
+--
+--   local modified = false
+--   local in_module_block = false
+--   local new_lines = {}
+--   local block_indent = ""
+--   local active_source = nil
+--
+--   for _, line in ipairs(lines) do
+--     -- Check for module block start
+--     if not in_module_block then
+--       table.insert(new_lines, line)
+--       local module_match = line:match(patterns.module_block)
+--       if module_match then
+--         in_module_block = true
+--         block_indent = module_match
+--         active_source = nil
+--       end
+--       goto continue
+--     end
+--
+--     -- Check for module block end
+--     if line:match('^' .. block_indent .. '}') then
+--       in_module_block = false
+--       table.insert(new_lines, line)
+--       goto continue
+--     end
+--
+--     -- Process module block content
+--     local line_indent = line:match('^(%s*)')
+--     if line_indent ~= block_indent .. '  ' then
+--       table.insert(new_lines, line)
+--       goto continue
+--     end
+--
+--     -- Handle source lines
+--     if line:match('%s*source%s*=') and not line:match('^%s*#') then
+--       local source = line:match('source%s*=%s*"([^"]+)"')
+--       if source then
+--         active_source = source
+--         table.insert(new_lines, line)
+--
+--         if source:match("^" .. namespace .. "/") then
+--           local latest_version, latest_major = get_latest_version_info(source)
+--           if latest_version then
+--             local new_version_constraint = latest_major == 0
+--                 and "~> 0." .. select(2, parse_version(latest_version))
+--                 or "~> " .. latest_major .. ".0"
+--
+--             table.insert(new_lines, string.format('%s  version = "%s"', block_indent, new_version_constraint))
+--             modified = true
+--           end
+--         end
+--       else
+--         table.insert(new_lines, line)
+--       end
+--       goto continue
+--     end
+--
+--     -- Handle version lines
+--     if line:match('%s*version%s*=') and not line:match('^%s*#') then
+--       if not active_source or not active_source:match("^" .. namespace .. "/") then
+--         table.insert(new_lines, line)
+--       end
+--       goto continue
+--     end
+--
+--     -- Keep all other lines
+--     table.insert(new_lines, line)
+--
+--     ::continue::
+--   end
+--
+--   if modified then
+--     if vim.fn.writefile(new_lines, file_path) == -1 then
+--       vim.notify("Failed to write file: " .. file_path, vim.log.levels.ERROR)
+--       return false
+--     end
+--     return true
+--   end
+--
+--   return false
+-- end
 
 local function process_files_parallel(files, processor_fn, args)
   local modified_count = 0
