@@ -153,6 +153,78 @@ local function find_terraform_files()
   return files
 end
 
+-- local function process_file(file_path, module_config, is_local)
+--   local lines = vim.fn.readfile(file_path)
+--   if not lines then
+--     vim.notify("Failed to read file: " .. file_path, vim.log.levels.ERROR)
+--     return false
+--   end
+--
+--   local modified = false
+--   local in_module_block = false
+--   local new_lines = {}
+--   local block_indent = ""
+--
+--   for i, line in ipairs(lines) do
+--     if not in_module_block then
+--       table.insert(new_lines, line)
+--       local module_match = line:match(patterns.module_block)
+--       if module_match and lines[i + 1] then
+--         block_indent = module_match
+--         local next_line = lines[i + 1]
+--         if next_line:match('source%s*=%s*"' .. module_config.registry_source .. '"') or
+--             next_line:match('source%s*=%s*"../../"') then
+--           in_module_block = true
+--         end
+--       end
+--     else
+--       if line:match('^' .. block_indent .. '}') then
+--         in_module_block = false
+--         table.insert(new_lines, line)
+--       else
+--         local line_indent = line:match('^(%s*)')
+--         if line_indent == block_indent .. '  ' then
+--           if line:match('%s*source%s*=') then
+--             if is_local then
+--               table.insert(new_lines, block_indent .. '  source = "../../"')
+--             else
+--               table.insert(new_lines, string.format('%s  source  = "%s"', block_indent, module_config.registry_source))
+--               local latest_version, latest_major = get_latest_version_info(module_config.registry_source)
+--               if latest_version then
+--                 local new_version_constraint
+--                 if latest_major == 0 then
+--                   local _, latest_minor = parse_version(latest_version)
+--                   new_version_constraint = "~> 0." .. latest_minor
+--                 else
+--                   new_version_constraint = "~> " .. latest_major .. ".0"
+--                 end
+--                 table.insert(new_lines, string.format('%s  version = "%s"', block_indent, new_version_constraint))
+--               end
+--             end
+--             modified = true
+--           elseif line:match('%s*version%s*=') then
+--             modified = true
+--           else
+--             table.insert(new_lines, line)
+--           end
+--         else
+--           table.insert(new_lines, line)
+--         end
+--       end
+--     end
+--   end
+--
+--   if modified then
+--     if vim.fn.writefile(new_lines, file_path) == -1 then
+--       vim.notify("Failed to write file: " .. file_path, vim.log.levels.ERROR)
+--       return false
+--     end
+--     return true
+--   end
+--
+--   return false
+-- end
+
 local function process_file(file_path, module_config, is_local)
   local lines = vim.fn.readfile(file_path)
   if not lines then
@@ -164,6 +236,8 @@ local function process_file(file_path, module_config, is_local)
   local in_module_block = false
   local new_lines = {}
   local block_indent = ""
+  local found_source = false
+  local found_version = false
 
   for i, line in ipairs(lines) do
     if not in_module_block then
@@ -175,35 +249,49 @@ local function process_file(file_path, module_config, is_local)
         if next_line:match('source%s*=%s*"' .. module_config.registry_source .. '"') or
             next_line:match('source%s*=%s*"../../"') then
           in_module_block = true
+          found_source = false
+          found_version = false
         end
       end
     else
       if line:match('^' .. block_indent .. '}') then
         in_module_block = false
+        found_source = false
+        found_version = false
         table.insert(new_lines, line)
       else
         local line_indent = line:match('^(%s*)')
         if line_indent == block_indent .. '  ' then
           if line:match('%s*source%s*=') then
-            if is_local then
-              table.insert(new_lines, block_indent .. '  source = "../../"')
-            else
-              table.insert(new_lines, string.format('%s  source  = "%s"', block_indent, module_config.registry_source))
-              local latest_version, latest_major = get_latest_version_info(module_config.registry_source)
-              if latest_version then
-                local new_version_constraint
-                if latest_major == 0 then
-                  local _, latest_minor = parse_version(latest_version)
-                  new_version_constraint = "~> 0." .. latest_minor
-                else
-                  new_version_constraint = "~> " .. latest_major .. ".0"
+            if not found_source then
+              found_source = true
+              if is_local then
+                table.insert(new_lines, block_indent .. '  source = "../../"')
+              else
+                table.insert(new_lines, string.format('%s  source  = "%s"', block_indent, module_config.registry_source))
+                local latest_version, latest_major = get_latest_version_info(module_config.registry_source)
+                if latest_version then
+                  local new_version_constraint
+                  if latest_major == 0 then
+                    local _, latest_minor = parse_version(latest_version)
+                    new_version_constraint = "~> 0." .. latest_minor
+                  else
+                    new_version_constraint = "~> " .. latest_major .. ".0"
+                  end
+                  table.insert(new_lines, string.format('%s  version = "%s"', block_indent, new_version_constraint))
+                  found_version = true
                 end
-                table.insert(new_lines, string.format('%s  version = "%s"', block_indent, new_version_constraint))
+              end
+              modified = true
+            end
+          elseif line:match('%s*version%s*=') then
+            if not found_version then
+              found_version = true
+              -- Only add version line if we're not in local mode and haven't already added it
+              if not is_local and not modified then
+                table.insert(new_lines, line)
               end
             end
-            modified = true
-          elseif line:match('%s*version%s*=') then
-            modified = true
           else
             table.insert(new_lines, line)
           end
@@ -225,6 +313,7 @@ local function process_file(file_path, module_config, is_local)
   return false
 end
 
+
 local function process_file_for_all_modules(file_path)
   local lines = vim.fn.readfile(file_path)
   if not lines then
@@ -236,63 +325,41 @@ local function process_file_for_all_modules(file_path)
   local in_module_block = false
   local new_lines = {}
   local block_indent = ""
-  local source_line_index = nil
-  local version_line_index = nil
-  local source_line = nil
-  local version_line = nil
+  local current_source = nil
+  local found_source = false
+  local found_version = false
 
   for _, line in ipairs(lines) do
-    table.insert(new_lines, line)
-
     if not in_module_block then
+      table.insert(new_lines, line)
       local module_match = line:match(patterns.module_block)
       if module_match then
         in_module_block = true
         block_indent = module_match
-        source_line_index = nil
-        version_line_index = nil
-        source_line = nil
-        version_line = nil
+        current_source = nil
+        found_source = false
+        found_version = false
       end
     else
       if line:match('^' .. block_indent .. '}') then
         in_module_block = false
+        current_source = nil
+        found_source = false
+        found_version = false
+        table.insert(new_lines, line)
+      else
+        local line_indent = line:match('^(%s*)')
+        if line_indent == block_indent .. '  ' then
+          if line:match('%s*source%s*=') then
+            if not found_source then
+              found_source = true
+              current_source = line:match('source%s*=%s*"([^"]+)"')
+              table.insert(new_lines, line)
 
-        if source_line_index and source_line then
-          -- Extract source without quotes
-          local source_value = source_line:match('source%s*=%s*"([^"]+)"')
-          if source_value then
-            -- Only process modules from your namespace
-            local source_namespace = source_value:match("^([^/]+)/")
-            if source_namespace == namespace then
-              local latest_version, latest_major = get_latest_version_info(source_value)
-              if latest_version then
-                local existing_version = nil
-                if version_line then
-                  existing_version = version_line:match('version%s*=%s*"([^"]+)"')
-                end
-
-                local update_version = true
-                if existing_version then
-                  local existing_major, existing_minor = existing_version:match(patterns.version_constraint)
-                  existing_major = tonumber(existing_major)
-                  existing_minor = tonumber(existing_minor)
-                  local latest_major_version, latest_minor_version = parse_version(latest_version)
-
-                  if existing_major == latest_major_version then
-                    if latest_major_version == 0 then
-                      if existing_minor and latest_minor_version and existing_minor >= latest_minor_version then
-                        update_version = false
-                      end
-                    else
-                      update_version = false
-                    end
-                  elseif existing_major > latest_major_version then
-                    update_version = false
-                  end
-                end
-
-                if update_version then
+              -- If this is a module from our namespace, prepare to update/add version
+              if current_source and current_source:match("^" .. namespace .. "/") then
+                local latest_version, latest_major = get_latest_version_info(current_source)
+                if latest_version then
                   local new_version_constraint
                   if latest_major == 0 then
                     local _, latest_minor = parse_version(latest_version)
@@ -301,29 +368,24 @@ local function process_file_for_all_modules(file_path)
                     new_version_constraint = "~> " .. latest_major .. ".0"
                   end
 
-                  if version_line_index then
-                    new_lines[version_line_index] = string.format('%s  version = "%s"', block_indent,
-                      new_version_constraint)
-                  else
-                    table.insert(new_lines, source_line_index + 1,
-                      string.format('%s  version = "%s"', block_indent, new_version_constraint))
-                  end
+                  -- Add version immediately after source
+                  table.insert(new_lines, string.format('%s  version = "%s"', block_indent, new_version_constraint))
+                  found_version = true
                   modified = true
                 end
               end
             end
-          end
-        end
-      else
-        local line_indent = line:match('^(%s*)')
-        if line_indent == block_indent .. '  ' then
-          if line:match('%s*source%s*=') then
-            source_line_index = #new_lines
-            source_line = line
           elseif line:match('%s*version%s*=') then
-            version_line_index = #new_lines
-            version_line = line
+            if not found_version and current_source and current_source:match("^" .. namespace .. "/") then
+              found_version = true
+              modified = true
+              -- Version will have been added above if needed
+            end
+          else
+            table.insert(new_lines, line)
           end
+        else
+          table.insert(new_lines, line)
         end
       end
     end
@@ -339,6 +401,121 @@ local function process_file_for_all_modules(file_path)
 
   return false
 end
+
+-- local function process_file_for_all_modules(file_path)
+--   local lines = vim.fn.readfile(file_path)
+--   if not lines then
+--     vim.notify("Failed to read file: " .. file_path, vim.log.levels.ERROR)
+--     return false
+--   end
+--
+--   local modified = false
+--   local in_module_block = false
+--   local new_lines = {}
+--   local block_indent = ""
+--   local source_line_index = nil
+--   local version_line_index = nil
+--   local source_line = nil
+--   local version_line = nil
+--
+--   for _, line in ipairs(lines) do
+--     table.insert(new_lines, line)
+--
+--     if not in_module_block then
+--       local module_match = line:match(patterns.module_block)
+--       if module_match then
+--         in_module_block = true
+--         block_indent = module_match
+--         source_line_index = nil
+--         version_line_index = nil
+--         source_line = nil
+--         version_line = nil
+--       end
+--     else
+--       if line:match('^' .. block_indent .. '}') then
+--         in_module_block = false
+--
+--         if source_line_index and source_line then
+--           -- Extract source without quotes
+--           local source_value = source_line:match('source%s*=%s*"([^"]+)"')
+--           if source_value then
+--             -- Only process modules from your namespace
+--             local source_namespace = source_value:match("^([^/]+)/")
+--             if source_namespace == namespace then
+--               local latest_version, latest_major = get_latest_version_info(source_value)
+--               if latest_version then
+--                 local existing_version = nil
+--                 if version_line then
+--                   existing_version = version_line:match('version%s*=%s*"([^"]+)"')
+--                 end
+--
+--                 local update_version = true
+--                 if existing_version then
+--                   local existing_major, existing_minor = existing_version:match(patterns.version_constraint)
+--                   existing_major = tonumber(existing_major)
+--                   existing_minor = tonumber(existing_minor)
+--                   local latest_major_version, latest_minor_version = parse_version(latest_version)
+--
+--                   if existing_major == latest_major_version then
+--                     if latest_major_version == 0 then
+--                       if existing_minor and latest_minor_version and existing_minor >= latest_minor_version then
+--                         update_version = false
+--                       end
+--                     else
+--                       update_version = false
+--                     end
+--                   elseif existing_major > latest_major_version then
+--                     update_version = false
+--                   end
+--                 end
+--
+--                 if update_version then
+--                   local new_version_constraint
+--                   if latest_major == 0 then
+--                     local _, latest_minor = parse_version(latest_version)
+--                     new_version_constraint = "~> 0." .. latest_minor
+--                   else
+--                     new_version_constraint = "~> " .. latest_major .. ".0"
+--                   end
+--
+--                   if version_line_index then
+--                     new_lines[version_line_index] = string.format('%s  version = "%s"', block_indent,
+--                       new_version_constraint)
+--                   else
+--                     table.insert(new_lines, source_line_index + 1,
+--                       string.format('%s  version = "%s"', block_indent, new_version_constraint))
+--                   end
+--                   modified = true
+--                 end
+--               end
+--             end
+--           end
+--         end
+--       else
+--         local line_indent = line:match('^(%s*)')
+--         if line_indent == block_indent .. '  ' then
+--           if line:match('%s*source%s*=') then
+--             source_line_index = #new_lines
+--             source_line = line
+--           elseif line:match('%s*version%s*=') then
+--             version_line_index = #new_lines
+--             version_line = line
+--           end
+--         end
+--       end
+--     end
+--   end
+--
+--   if modified then
+--     if vim.fn.writefile(new_lines, file_path) == -1 then
+--       vim.notify("Failed to write file: " .. file_path, vim.log.levels.ERROR)
+--       return false
+--     end
+--     return true
+--   end
+--
+--   return false
+-- end
 
 local function process_files_parallel(files, processor_fn, args)
   local modified_count = 0
