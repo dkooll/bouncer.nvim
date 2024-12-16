@@ -151,7 +151,7 @@ local function process_file(file_path, module_config, is_local)
   local in_module_block = false
   local new_lines = {}
   local block_indent = ""
-  local source_added = false
+  local added_source = false
 
   for i, line in ipairs(lines) do
     -- Check for module block start
@@ -160,10 +160,10 @@ local function process_file(file_path, module_config, is_local)
       local module_match = line:match(patterns.module_block)
       if module_match and lines[i + 1] then
         if lines[i + 1]:match('source%s*=%s*"' .. module_config.registry_source .. '"') or
-            lines[i + 1]:match('source%s*=%s*"../../"') then
+           lines[i + 1]:match('source%s*=%s*"../../"') then
           in_module_block = true
           block_indent = module_match
-          source_added = false
+          added_source = false
         end
       end
       goto continue
@@ -171,7 +171,24 @@ local function process_file(file_path, module_config, is_local)
 
     -- Check for module block end
     if line:match('^' .. block_indent .. '}') then
+      -- Ensure source is added before block end
+      if not added_source and in_module_block then
+        if is_local then
+          table.insert(new_lines, block_indent .. '  source = "../../"')
+        else
+          table.insert(new_lines, string.format('%s  source  = "%s"', block_indent, module_config.registry_source))
+          local latest_version, latest_major = get_latest_version_info(module_config.registry_source)
+          if latest_version then
+            local new_version_constraint = latest_major == 0
+              and "~> 0." .. select(2, parse_version(latest_version))
+              or "~> " .. latest_major .. ".0"
+            table.insert(new_lines, string.format('%s  version = "%s"', block_indent, new_version_constraint))
+          end
+        end
+        modified = true
+      end
       in_module_block = false
+      added_source = false
       table.insert(new_lines, line)
       goto continue
     end
@@ -185,7 +202,7 @@ local function process_file(file_path, module_config, is_local)
 
     -- Handle source lines
     if line:match('%s*source%s*=') then
-      if not source_added then
+      if not added_source then
         if is_local then
           table.insert(new_lines, block_indent .. '  source = "../../"')
         else
@@ -193,12 +210,12 @@ local function process_file(file_path, module_config, is_local)
           local latest_version, latest_major = get_latest_version_info(module_config.registry_source)
           if latest_version then
             local new_version_constraint = latest_major == 0
-                and "~> 0." .. select(2, parse_version(latest_version))
-                or "~> " .. latest_major .. ".0"
+              and "~> 0." .. select(2, parse_version(latest_version))
+              or "~> " .. latest_major .. ".0"
             table.insert(new_lines, string.format('%s  version = "%s"', block_indent, new_version_constraint))
           end
         end
-        source_added = true
+        added_source = true
         modified = true
       end
       goto continue
@@ -225,6 +242,92 @@ local function process_file(file_path, module_config, is_local)
 
   return false
 end
+
+-- local function process_file(file_path, module_config, is_local)
+--   local lines = vim.fn.readfile(file_path)
+--   if not lines then
+--     vim.notify("Failed to read file: " .. file_path, vim.log.levels.ERROR)
+--     return false
+--   end
+--
+--   local modified = false
+--   local in_module_block = false
+--   local new_lines = {}
+--   local block_indent = ""
+--   local source_added = false
+--
+--   for i, line in ipairs(lines) do
+--     -- Check for module block start
+--     if not in_module_block then
+--       table.insert(new_lines, line)
+--       local module_match = line:match(patterns.module_block)
+--       if module_match and lines[i + 1] then
+--         if lines[i + 1]:match('source%s*=%s*"' .. module_config.registry_source .. '"') or
+--             lines[i + 1]:match('source%s*=%s*"../../"') then
+--           in_module_block = true
+--           block_indent = module_match
+--           source_added = false
+--         end
+--       end
+--       goto continue
+--     end
+--
+--     -- Check for module block end
+--     if line:match('^' .. block_indent .. '}') then
+--       in_module_block = false
+--       table.insert(new_lines, line)
+--       goto continue
+--     end
+--
+--     -- Process module block content
+--     local line_indent = line:match('^(%s*)')
+--     if line_indent ~= block_indent .. '  ' then
+--       table.insert(new_lines, line)
+--       goto continue
+--     end
+--
+--     -- Handle source lines
+--     if line:match('%s*source%s*=') then
+--       if not source_added then
+--         if is_local then
+--           table.insert(new_lines, block_indent .. '  source = "../../"')
+--         else
+--           table.insert(new_lines, string.format('%s  source  = "%s"', block_indent, module_config.registry_source))
+--           local latest_version, latest_major = get_latest_version_info(module_config.registry_source)
+--           if latest_version then
+--             local new_version_constraint = latest_major == 0
+--                 and "~> 0." .. select(2, parse_version(latest_version))
+--                 or "~> " .. latest_major .. ".0"
+--             table.insert(new_lines, string.format('%s  version = "%s"', block_indent, new_version_constraint))
+--           end
+--         end
+--         source_added = true
+--         modified = true
+--       end
+--       goto continue
+--     end
+--
+--     -- Skip version lines as they're handled with source
+--     if line:match('%s*version%s*=') then
+--       goto continue
+--     end
+--
+--     -- Keep all other lines
+--     table.insert(new_lines, line)
+--
+--     ::continue::
+--   end
+--
+--   if modified then
+--     if vim.fn.writefile(new_lines, file_path) == -1 then
+--       vim.notify("Failed to write file: " .. file_path, vim.log.levels.ERROR)
+--       return false
+--     end
+--     return true
+--   end
+--
+--   return false
+-- end
 
 local function process_file_for_all_modules(file_path)
   local lines = vim.fn.readfile(file_path)
