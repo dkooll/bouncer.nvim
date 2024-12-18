@@ -104,26 +104,6 @@ local function get_registry_token()
   return token_match
 end
 
--- local function get_registry_token()
---   -- Try environment variable first
---   local token = os.getenv(registry_config.token_env)
---   if token then return token end
---
---   -- Try .terraformrc file
---   local home = os.getenv("HOME")
---   local f = io.open(home .. "/.terraformrc", "r")
---   if not f then return nil end
---
---   local content = f:read("*all")
---   f:close()
---
---   -- Look for credentials block with token
---   local host_pattern = string.gsub(registry_config.host, "%.", "%%.")
---   local token_match = content:match('credentials%s+"' .. host_pattern .. '"%s*{%s*token%s*=%s*"([^"]+)"')
---
---   return token_match
--- end
-
 local function get_latest_version_info(registry_source)
   if registry_version_cache[registry_source] then
     return unpack(registry_version_cache[registry_source])
