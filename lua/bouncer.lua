@@ -117,7 +117,7 @@ local function get_latest_version_info(registry_source)
 
   if registry_config.is_private then
     local org, name, provider = source_no_subdir:match(string.format("^%s/([^/]+)/([^/]+)/([^/]+)$", registry_config
-    .host))
+      .host))
     if not (org and name and provider) then
       vim.notify("Invalid private registry source format: " .. registry_source, vim.log.levels.ERROR)
       return nil, nil
