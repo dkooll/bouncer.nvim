@@ -285,7 +285,6 @@ end
 --   return false
 -- end
 
-
 local function process_file(file_path, mod_config, is_local)
   local lines = vim.fn.readfile(file_path)
   if not lines then
@@ -356,7 +355,6 @@ local function process_file(file_path, mod_config, is_local)
 
   return false
 end
-
 
 local function process_file_for_all_modules(file_path)
   local lines = vim.fn.readfile(file_path)
