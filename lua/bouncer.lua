@@ -216,60 +216,60 @@ local function process_file(file_path, mod_config, is_local)
     if not in_module_block then
       table.insert(new_lines, line)
       local module_match = line:match(patterns.module_block)
-      if module_match then
-        in_module_block = true
-        block_indent = module_match
-        source_added = false
-
-        -- Check next line immediately to handle single-line blocks
-        local next_line = lines[i + 1] or ""
-        if next_line:match('^%s*}') then
-          in_module_block = false
+      if module_match and lines[i + 1] then
+        local expected_source = mod_config.is_private
+            and ('source%s*=%s*"' .. mod_config.registry_source .. '"')
+            or ('source%s*=%s*"' .. mod_config.registry_source .. '"')
+        if lines[i + 1]:match(expected_source) or
+            lines[i + 1]:match('source%s*=%s*"../../"') then
+          in_module_block = true
+          block_indent = module_match
+          source_added = false
         end
       end
       goto continue
     end
 
-    -- Handle block closure with flexible indentation
-    if line:match('^%s*}') and line:find('}', 1, true) then
+    if line:match('^' .. block_indent .. '}') then
       in_module_block = false
       table.insert(new_lines, line)
       goto continue
     end
 
-    -- Detect any source line (commented or not) with local path
-    local is_local_source = line:match('%s*#?%s*source%s*=%s*"%.%./%.%./"')
-
-    -- Detect any version line (commented or not)
-    local is_version_line = line:match('%s*#?%s*version%s*=')
-
-    -- Remove local source lines and version lines
-    if is_local_source or is_version_line then
-      modified = true
+    local line_indent = line:match('^(%s*)')
+    if line_indent ~= block_indent .. '  ' then
+      table.insert(new_lines, line)
       goto continue
     end
 
-    -- Add new source/version when processing registry version
-    if not is_local and not source_added and line:match('^%s*%S') then
-      -- Insert before the first non-attribute line in the block
-      table.insert(new_lines, string.format('%s  source  = "%s"',
-        block_indent, mod_config.registry_source))
+    if line:match('%s*source%s*=') then
+      if not source_added then
+        if is_local then
+          table.insert(new_lines, block_indent .. '  source = "../../"')
+        else
+          table.insert(new_lines, string.format('%s  source  = "%s"',
+            block_indent, mod_config.registry_source))
 
-      local latest_version, latest_major = get_latest_version_info(mod_config.registry_source)
-      if latest_version then
-        local new_version_constraint = latest_major == 0
-            and "~> 0." .. select(2, parse_version(latest_version))
-            or "~> " .. latest_major .. ".0"
-        table.insert(new_lines, string.format('%s  version = "%s"',
-          block_indent, new_version_constraint))
+          local latest_version, latest_major = get_latest_version_info(mod_config.registry_source)
+          if latest_version then
+            local new_version_constraint = latest_major == 0
+                and "~> 0." .. select(2, parse_version(latest_version))
+                or "~> " .. latest_major .. ".0"
+            table.insert(new_lines, string.format('%s  version = "%s"',
+              block_indent, new_version_constraint))
+          end
+        end
+        source_added = true
+        modified = true
       end
-
-      source_added = true
-      modified = true
-      table.insert(new_lines, line) -- Keep the current line
-    else
-      table.insert(new_lines, line)
+      goto continue
     end
+
+    if line:match('%s*version%s*=') then
+      goto continue
+    end
+
+    table.insert(new_lines, line)
 
     ::continue::
   end
@@ -284,92 +284,6 @@ local function process_file(file_path, mod_config, is_local)
 
   return false
 end
-
--- local function process_file(file_path, mod_config, is_local)
---   local lines = vim.fn.readfile(file_path)
---   if not lines then
---     vim.notify("Failed to read file: " .. file_path, vim.log.levels.ERROR)
---     return false
---   end
---
---   local modified = false
---   local in_module_block = false
---   local new_lines = {}
---   local block_indent = ""
---   local source_added = false
---
---   for i, line in ipairs(lines) do
---     if not in_module_block then
---       table.insert(new_lines, line)
---       local module_match = line:match(patterns.module_block)
---       if module_match and lines[i + 1] then
---         local expected_source = mod_config.is_private
---             and ('source%s*=%s*"' .. mod_config.registry_source .. '"')
---             or ('source%s*=%s*"' .. mod_config.registry_source .. '"')
---         if lines[i + 1]:match(expected_source) or
---             lines[i + 1]:match('source%s*=%s*"../../"') then
---           in_module_block = true
---           block_indent = module_match
---           source_added = false
---         end
---       end
---       goto continue
---     end
---
---     if line:match('^' .. block_indent .. '}') then
---       in_module_block = false
---       table.insert(new_lines, line)
---       goto continue
---     end
---
---     local line_indent = line:match('^(%s*)')
---     if line_indent ~= block_indent .. '  ' then
---       table.insert(new_lines, line)
---       goto continue
---     end
---
---     if line:match('%s*source%s*=') then
---       if not source_added then
---         if is_local then
---           table.insert(new_lines, block_indent .. '  source = "../../"')
---         else
---           table.insert(new_lines, string.format('%s  source  = "%s"',
---             block_indent, mod_config.registry_source))
---
---           local latest_version, latest_major = get_latest_version_info(mod_config.registry_source)
---           if latest_version then
---             local new_version_constraint = latest_major == 0
---                 and "~> 0." .. select(2, parse_version(latest_version))
---                 or "~> " .. latest_major .. ".0"
---             table.insert(new_lines, string.format('%s  version = "%s"',
---               block_indent, new_version_constraint))
---           end
---         end
---         source_added = true
---         modified = true
---       end
---       goto continue
---     end
---
---     if line:match('%s*version%s*=') then
---       goto continue
---     end
---
---     table.insert(new_lines, line)
---
---     ::continue::
---   end
---
---   if modified then
---     if vim.fn.writefile(new_lines, file_path) == -1 then
---       vim.notify("Failed to write file: " .. file_path, vim.log.levels.ERROR)
---       return false
---     end
---     return true
---   end
---
---   return false
--- end
 
 local function process_file_for_all_modules(file_path)
   local lines = vim.fn.readfile(file_path)
