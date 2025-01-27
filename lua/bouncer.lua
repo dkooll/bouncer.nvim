@@ -207,77 +207,63 @@ local function process_file(file_path, mod_config, is_local)
   end
 
   local modified = false
-  local in_target_block = false
   local new_lines = {}
-  local block_indent = ""
-  local source_replaced = false
-  local version_replaced = false
+  local current_block = {}
+  local in_target_module = false
+  local target_source = is_local and "../../" or mod_config.registry_source
 
-  -- Use module-level patterns instead of redefining
-  local modified_patterns = {
-    module_start = '^(%s*)module%s+"[^"]+"%s+{',
-    any_source = '^%s*#?%s*source%s*=%s*"([^"]*)"%s*',
-    any_version = '^%s*#?%s*version%s*=%s*"[^"]*"%s*',
-    local_source = "../../"
+  -- Use modified name for patterns to avoid redefinition
+  local module_patterns = {
+    module_start = '^%s*module%s+"([^"]+)"%s*{',
+    source_line = '^%s*#?%s*source%s*=%s*"[^"]*"%s*',
+    version_line = '^%s*#?%s*version%s*=%s*"[^"]*"%s*',
+    block_end = '^%s*}'
   }
 
-  for _, line in ipairs(lines) do -- Fixed unused 'i' by using _
-    if not in_target_block then
-      -- Check for module block start
-      local indent = line:match(modified_patterns.module_start)
-      if indent then
-        block_indent = indent
-        in_target_block = true
-        source_replaced = false
-        version_replaced = false
-      end
-      table.insert(new_lines, line)
-      goto continue
-    end
+  for _, line in ipairs(lines) do
+    local module_name = line:match(module_patterns.module_start)
 
-    -- Check for block end
-    if line:match('^' .. block_indent .. '}') then
-      in_target_block = false
-      -- Add new source/version if not already added
-      if not source_replaced then
-        table.insert(new_lines, block_indent .. '  source  = "' .. (
-          is_local and "../../" or mod_config.registry_source -- Now using is_local
-        ) .. '"')
+    if module_name then
+      -- Finalize previous block if it was our target
+      if in_target_module then
         modified = true
-      end
-      if not version_replaced and not is_local then -- Use is_local here
-        local latest_version = get_latest_version_info(mod_config.registry_source)
-        if latest_version then
-          table.insert(new_lines, block_indent .. '  version = "~> ' .. latest_version .. '"')
-          modified = true
+        -- Add new source/version at the start of block attributes
+        table.insert(current_block, 1, string.format('  source  = "%s"', target_source))
+
+        if not is_local then
+          local latest_version = get_latest_version_info(mod_config.registry_source)
+          if latest_version then
+            local major = latest_version:match("^(%d+)")
+            local version_constraint = major == "0"
+                and "~> " .. latest_version:match("^(%d+%.%d+)")
+                or "~> " .. major .. ".0"
+            table.insert(current_block, 2, string.format('  version = "%s"', version_constraint))
+          end
         end
       end
-      table.insert(new_lines, line)
+
+      -- Start new module block
+      in_target_module = (module_name == mod_config.module_name)
+      current_block = { line }
       goto continue
     end
 
-    -- Handle content within target module block
-    local source_match = line:match(modified_patterns.any_source)
-    if source_match then
-      -- Remove line if it's local source or existing registry source
-      if source_match == modified_patterns.local_source or source_match == mod_config.registry_source then
+    if in_target_module then
+      -- Skip existing source/version lines
+      if line:match(module_patterns.source_line) or line:match(module_patterns.version_line) then
         modified = true
-        source_replaced = true
-        goto continue -- Skip adding this line
+      else
+        table.insert(current_block, line)
       end
+    else
+      table.insert(new_lines, line)
     end
-
-    local version_match = line:match(modified_patterns.any_version)
-    if version_match then
-      modified = true
-      version_replaced = true
-      goto continue -- Skip adding this line
-    end
-
-    table.insert(new_lines, line)
 
     ::continue::
   end
+
+  -- Add the final processed block
+  vim.list_extend(new_lines, current_block)
 
   if modified then
     if vim.fn.writefile(new_lines, file_path) == -1 then
@@ -289,7 +275,6 @@ local function process_file(file_path, mod_config, is_local)
 
   return false
 end
-
 -- local function process_file(file_path, mod_config, is_local)
 --   local lines = vim.fn.readfile(file_path)
 --   if not lines then
