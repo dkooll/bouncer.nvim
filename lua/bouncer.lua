@@ -306,38 +306,39 @@ local function process_file(file_path, mod_config, is_local)
     end
 
     if in_target_module then
-      -- Handle target module block
-      if line:match('^' .. block_indent .. '}') then
-        in_target_module = false
+      -- Handle target module block start
+      if line:match('^%s*module') then
         table.insert(new_lines, line)
-        goto continue
-      end
 
-      -- Replace source/version in target module
-      if line:match('%s*source%s*=') then
+        -- Immediately add source line
         if is_local then
           table.insert(new_lines, block_indent .. '  source = "../../"')
+          modified = true
         else
           table.insert(new_lines, string.format('%s  source  = "%s"',
             block_indent, mod_config.registry_source))
+
+          -- Add version constraint
+          local latest_version, latest_major = get_latest_version_info(mod_config.registry_source)
+          if latest_version then
+            local new_version = latest_major == 0 and "~> 0."..select(2, parse_version(latest_version))
+                             or "~> "..latest_major..".0"
+            table.insert(new_lines, string.format('%s  version = "%s"', block_indent, new_version))
+          end
+          modified = true
         end
+        goto continue
+      end
+
+      -- Skip existing source/version lines
+      if line:match('%s*source%s*=') or line:match('%s*version%s*=') then
         modified = true
         goto continue
       end
 
-      if line:match('%s*version%s*=') then
-        if not is_local then
-          local latest_version, latest_major = get_latest_version_info(mod_config.registry_source)
-          if latest_version then
-            local new_version_constraint = latest_major == 0
-                and "~> 0." .. select(2, parse_version(latest_version))
-                or "~> " .. latest_major .. ".0"
-            table.insert(new_lines, string.format('%s  version = "%s"',
-              block_indent, new_version_constraint))
-          end
-        end
-        modified = true
-        goto continue
+      -- Preserve closing bracket
+      if line:match('^%s*}') then
+        in_target_module = false
       end
     end
 
