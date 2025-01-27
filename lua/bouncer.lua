@@ -294,27 +294,40 @@ local function process_file(file_path, mod_config, is_local)
   end
 
   local modified = false
-  local in_module_block = false
   local new_lines = {}
+  local in_target_module = false
   local block_indent = ""
 
   for _, line in ipairs(lines) do
-    if not in_module_block then
-      table.insert(new_lines, line)
-      local module_match = line:match(patterns.module_block)
-      if module_match then
-        in_module_block = true
-        block_indent = module_match
+    -- Detect module declaration
+    local module_name = line:match('^%s*module%s*"([^"]+)"%s*{')
+    if module_name then
+      in_target_module = (module_name == mod_config.module_name)
+      block_indent = line:match('^(%s*)module')
+    end
 
-        -- Add source and version immediately after module declaration
+    if in_target_module then
+      -- Handle target module block
+      if line:match('^' .. block_indent .. '}') then
+        in_target_module = false
+        table.insert(new_lines, line)
+        goto continue
+      end
+
+      -- Replace source/version in target module
+      if line:match('%s*source%s*=') then
         if is_local then
           table.insert(new_lines, block_indent .. '  source = "../../"')
         else
-          -- Add registry source
           table.insert(new_lines, string.format('%s  source  = "%s"',
             block_indent, mod_config.registry_source))
+        end
+        modified = true
+        goto continue
+      end
 
-          -- Add version constraint if available
+      if line:match('%s*version%s*=') then
+        if not is_local then
           local latest_version, latest_major = get_latest_version_info(mod_config.registry_source)
           if latest_version then
             local new_version_constraint = latest_major == 0
@@ -325,27 +338,11 @@ local function process_file(file_path, mod_config, is_local)
           end
         end
         modified = true
+        goto continue
       end
-      goto continue
     end
 
-    if line:match('^' .. block_indent .. '}') then
-      in_module_block = false
-      table.insert(new_lines, line)
-      goto continue
-    end
-
-    -- Skip existing source/version declarations
-    if line:match('%s*source%s*=') then
-      goto continue
-    end
-    if line:match('%s*version%s*=') then
-      goto continue
-    end
-
-    -- Preserve other lines with proper indentation
     table.insert(new_lines, line)
-
     ::continue::
   end
 
@@ -359,6 +356,7 @@ local function process_file(file_path, mod_config, is_local)
 
   return false
 end
+
 
 local function process_file_for_all_modules(file_path)
   local lines = vim.fn.readfile(file_path)
