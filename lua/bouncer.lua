@@ -488,7 +488,30 @@ local function process_file_for_all_modules(file_path)
           skip_lines[ver_line.line_number] = true
         end
 
-        -- Mark the source line index for adding a version after it
+        -- Mark empty lines after version lines for removal
+        for _, ver_line in ipairs(module.version_lines) do
+          local end_line = module.end_line or #lines
+          for i = ver_line.line_number + 1, end_line do
+            if not lines[i]:match("^%s*$") and not lines[i]:match("^%s*#") then
+              break
+            else
+              skip_lines[i] = true
+            end
+          end
+        end
+
+        -- Mark empty lines after source if there are no version lines
+        if #module.version_lines == 0 and module.source_line then
+          for i = module.source_line + 1, module.end_line do
+            if not lines[i]:match("^%s*$") and not lines[i]:match("^%s*#") then
+              break
+            else
+              skip_lines[i] = true
+            end
+          end
+        end
+
+        -- Mark the source line for adding a version after it
         skip_lines[module.source_line] = {
           is_source = true,
           source_value = module.source_value,
@@ -503,8 +526,15 @@ local function process_file_for_all_modules(file_path)
   for i, line in ipairs(lines) do
     if type(skip_lines[i]) == "table" and skip_lines[i].is_source then
       -- This is a source line for a registry module
-      -- Add the original source line
-      table.insert(new_lines, line)
+      -- Add the original source line, but ensure proper double-space formatting
+      local source_match = line:match(patterns.source_line)
+      if source_match then
+        -- Use the original source value but with consistent formatting
+        table.insert(new_lines, skip_lines[i].indent .. '  source  = "' .. source_match .. '"')
+      else
+        -- Fallback if pattern doesn't match
+        table.insert(new_lines, line)
+      end
 
       -- Add a new version line with the latest version constraint
       local latest_version, latest_major = get_latest_version_info(skip_lines[i].source_value)
@@ -513,11 +543,12 @@ local function process_file_for_all_modules(file_path)
             and "~> 0." .. select(2, parse_version(latest_version))
             or "~> " .. latest_major .. ".0"
         table.insert(new_lines, skip_lines[i].indent .. '  version = "' .. new_version_constraint .. '"')
+        -- Add a single blank line after version
+        table.insert(new_lines, "")
         modified = true
       end
     elseif skip_lines[i] == true then
-      -- This is a version line that should be skipped
-      -- Don't add it to new_lines
+      -- This is a line that should be skipped
       modified = true
     else
       -- Regular line, just add it
@@ -758,7 +789,7 @@ return M
 --
 --   if registry_config.is_private then
 --     local org, name, provider = source_no_subdir:match(string.format("^%s/([^/]+)/([^/]+)/([^/]+)$", registry_config
---       .host))
+--     .host))
 --     if not (org and name and provider) then
 --       vim.notify("Invalid private registry source format: " .. registry_source, vim.log.levels.ERROR)
 --       return nil, nil
@@ -930,10 +961,35 @@ return M
 --       -- Mark source line for replacement
 --       skip_lines[module.source_line] = true
 --
---       -- Mark all version lines for removal if switching to local
---       -- or all version lines for replacement if switching to registry
+--       -- Mark all lines between source and the next attribute for removal (empty lines)
+--       if module.source_line then
+--         -- Find the next attribute after source and mark empty lines for skipping
+--         for i = module.source_line + 1, module.end_line do
+--           if not lines[i]:match("^%s*$") and not lines[i]:match("^%s*#") then
+--             break
+--           else
+--             -- Mark empty lines to skip
+--             skip_lines[i] = true
+--           end
+--         end
+--       end
+--
+--       -- Mark all version lines for removal
 --       for _, ver_line in ipairs(module.version_lines) do
 --         skip_lines[ver_line.line_number] = true
+--
+--         -- Mark all lines between version and the next attribute for removal (empty lines)
+--         local found_next = false
+--         for i = ver_line.line_number + 1, module.end_line do
+--           if not found_next then
+--             if not lines[i]:match("^%s*$") and not lines[i]:match("^%s*#") then
+--               found_next = true
+--             else
+--               -- Mark empty lines to skip
+--               skip_lines[i] = true
+--             end
+--           end
+--         end
 --       end
 --     end
 --   end
@@ -950,18 +1006,23 @@ return M
 --           -- This is a source line we need to modify
 --           if is_local then
 --             table.insert(new_lines, module.indent .. '  source  = "../../"')
+--             -- Add a single blank line after source when switching to local
+--             table.insert(new_lines, "")
 --           else
 --             table.insert(new_lines, module.indent .. '  source  = "' .. mod_config.registry_source .. '"')
 --
---             -- Add version line only when switching to registry and only once
+--             -- Add version line immediately after source when switching to registry
 --             local latest_version, latest_major = get_latest_version_info(mod_config.registry_source)
 --             if latest_version then
 --               local new_version_constraint = latest_major == 0
 --                   and "~> 0." .. select(2, parse_version(latest_version))
 --                   or "~> " .. latest_major .. ".0"
 --               table.insert(new_lines, module.indent .. '  version = "' .. new_version_constraint .. '"')
+--               -- Add a single blank line after version
+--               table.insert(new_lines, "")
 --             end
 --           end
+--
 --           modified = true
 --         elseif (module.source_value == expected_source or module.source_value == "../../") then
 --           -- Check if this is a version line for a module we're processing
@@ -979,8 +1040,8 @@ return M
 --             modified = true
 --           else
 --             -- Not a source or version line, but still in the skip list?
---             -- This shouldn't happen, but add the line just in case
---             table.insert(new_lines, line)
+--             -- This is an empty line that should be skipped
+--             modified = true
 --           end
 --         end
 --       end
