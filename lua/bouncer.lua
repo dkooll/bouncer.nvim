@@ -347,15 +347,8 @@ local function process_file(file_path, mod_config, is_local)
                   or "~> " .. latest_major .. ".0"
               table.insert(new_lines, module.indent .. '  version = "' .. new_version_constraint .. '"')
 
-              -- Only add a blank line if there isn't already one
-              local next_line_idx = i + 1
-              if next_line_idx <= #lines then
-                local next_line = lines[next_line_idx]
-                if not next_line:match("^%s*$") then
-                  -- Next line is not blank, so add a blank line
-                  table.insert(new_lines, "")
-                end
-              end
+              -- Always add exactly one blank line after version
+              table.insert(new_lines, "")
             end
           end
 
@@ -697,6 +690,7 @@ function M.setup(opts)
 end
 
 return M
+
 -- local M = {}
 --
 -- -- Cache for module configurations to avoid repeated git commands
