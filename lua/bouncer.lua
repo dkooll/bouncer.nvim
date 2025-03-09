@@ -116,8 +116,7 @@ local function get_latest_version_info(registry_source)
   local headers = { accept = "application/json" }
 
   if registry_config.is_private then
-    local org, name, provider = source_no_subdir:match(string.format("^%s/([^/]+)/([^/]+)/([^/]+)$", registry_config
-    .host))
+    local org, name, provider = source_no_subdir:match(string.format("^%s/([^/]+)/([^/]+)/([^/]+)$", registry_config.host))
     if not (org and name and provider) then
       vim.notify("Invalid private registry source format: " .. registry_source, vim.log.levels.ERROR)
       return nil, nil
@@ -257,7 +256,7 @@ local function process_file(file_path, mod_config, is_local)
             table.insert(current_module.version_lines, {
               line_number = i,
               value = version,
-              indent = line:match("^(%s*)") -- Capture the line's indentation
+              indent = line:match("^(%s*)")  -- Capture the line's indentation
             })
           end
         end
@@ -278,7 +277,7 @@ local function process_file(file_path, mod_config, is_local)
   -- Second pass: modify the file based on the module analysis
   local modified = false
   local new_lines = {}
-  local skip_lines = {} -- Lines to skip
+  local skip_lines = {}  -- Lines to skip
 
   -- Prepare list of lines to modify/skip
   for _, module in ipairs(modules) do
@@ -320,7 +319,7 @@ local function process_file(file_path, mod_config, is_local)
         local expected_source = mod_config.registry_source
 
         if (module.source_value == expected_source or module.source_value == "../../") and
-            (i == module.source_line) then
+           (i == module.source_line) then
           -- This is a source line we need to modify
           if is_local then
             table.insert(new_lines, module.indent .. '  source  = "../../"')
@@ -801,7 +800,7 @@ return M
 --
 --   if registry_config.is_private then
 --     local org, name, provider = source_no_subdir:match(string.format("^%s/([^/]+)/([^/]+)/([^/]+)$", registry_config
---     .host))
+--       .host))
 --     if not (org and name and provider) then
 --       vim.notify("Invalid private registry source format: " .. registry_source, vim.log.levels.ERROR)
 --       return nil, nil
@@ -937,7 +936,7 @@ return M
 --
 --           -- Check for version line
 --           local version = line:match(patterns.version_line)
---           if version and current_module ~= nil then
+--           if version then
 --             table.insert(current_module.version_lines, {
 --               line_number = i,
 --               value = version,
@@ -973,6 +972,11 @@ return M
 --       -- Mark source line for replacement
 --       skip_lines[module.source_line] = true
 --
+--       -- Mark all version lines for removal
+--       for _, ver_line in ipairs(module.version_lines) do
+--         skip_lines[ver_line.line_number] = true
+--       end
+--
 --       -- Mark all lines between source and the next attribute for removal (empty lines)
 --       if module.source_line then
 --         -- Find the next attribute after source and mark empty lines for skipping
@@ -985,26 +989,11 @@ return M
 --           end
 --         end
 --       end
---
---       -- Mark all version lines for removal
---       for _, ver_line in ipairs(module.version_lines) do
---         skip_lines[ver_line.line_number] = true
---
---         -- Mark all lines between version and the next attribute for removal (empty lines)
---         local found_next = false
---         for i = ver_line.line_number + 1, module.end_line do
---           if not found_next then
---             if not lines[i]:match("^%s*$") and not lines[i]:match("^%s*#") then
---               found_next = true
---             else
---               -- Mark empty lines to skip
---               skip_lines[i] = true
---             end
---           end
---         end
---       end
 --     end
 --   end
+--
+--   -- Variables to track blank line state
+--   local just_added_blank_line = false
 --
 --   -- Process lines
 --   for i, line in ipairs(lines) do
@@ -1018,8 +1007,10 @@ return M
 --           -- This is a source line we need to modify
 --           if is_local then
 --             table.insert(new_lines, module.indent .. '  source  = "../../"')
+--
 --             -- Add a single blank line after source when switching to local
 --             table.insert(new_lines, "")
+--             just_added_blank_line = true
 --           else
 --             table.insert(new_lines, module.indent .. '  source  = "' .. mod_config.registry_source .. '"')
 --
@@ -1030,36 +1021,29 @@ return M
 --                   and "~> 0." .. select(2, parse_version(latest_version))
 --                   or "~> " .. latest_major .. ".0"
 --               table.insert(new_lines, module.indent .. '  version = "' .. new_version_constraint .. '"')
---               -- Add a single blank line after version
+--
+--               -- Always add exactly one blank line after version
 --               table.insert(new_lines, "")
+--               just_added_blank_line = true
 --             end
 --           end
 --
 --           modified = true
---         elseif (module.source_value == expected_source or module.source_value == "../../") then
---           -- Check if this is a version line for a module we're processing
---           local is_version_line = false
---           for _, ver_line in ipairs(module.version_lines) do
---             if i == ver_line.line_number then
---               is_version_line = true
---               break
---             end
---           end
---
---           -- Skip version lines completely (they're handled with the source line)
---           if is_version_line then
---             -- Do nothing, just skip
---             modified = true
---           else
---             -- Not a source or version line, but still in the skip list?
---             -- This is an empty line that should be skipped
---             modified = true
---           end
 --         end
 --       end
 --     else
---       -- Regular line, just add it
---       table.insert(new_lines, line)
+--       -- This is a regular line we should keep
+--
+--       -- If we just added a blank line and this line is also blank, skip it
+--       if just_added_blank_line and line:match("^%s*$") then
+--         just_added_blank_line = false
+--       else
+--         table.insert(new_lines, line)
+--         -- Reset the flag if we hit a non-empty line
+--         if not line:match("^%s*$") then
+--           just_added_blank_line = false
+--         end
+--       end
 --     end
 --   end
 --
@@ -1172,7 +1156,41 @@ return M
 --           skip_lines[ver_line.line_number] = true
 --         end
 --
---         -- Mark the source line index for adding a version after it
+--         -- Mark empty lines after version lines and between source and version for removal
+--         if #module.version_lines > 0 then
+--           local min_version_line = math.huge
+--           for _, ver_line in ipairs(module.version_lines) do
+--             min_version_line = math.min(min_version_line, ver_line.line_number)
+--           end
+--
+--           -- Mark empty lines between source and version for removal
+--           for i = module.source_line + 1, min_version_line - 1 do
+--             skip_lines[i] = true
+--           end
+--
+--           -- Mark empty lines after the last version line
+--           local end_line = module.end_line or #lines
+--           for i = module.version_lines[#module.version_lines].line_number + 1, end_line do
+--             if not lines[i]:match("^%s*$") and not lines[i]:match("^%s*#") then
+--               break
+--             else
+--               skip_lines[i] = true
+--             end
+--           end
+--         end
+--
+--         -- Mark empty lines after source if there are no version lines
+--         if #module.version_lines == 0 and module.source_line then
+--           for i = module.source_line + 1, module.end_line or #lines do
+--             if not lines[i]:match("^%s*$") and not lines[i]:match("^%s*#") then
+--               break
+--             else
+--               skip_lines[i] = true
+--             end
+--           end
+--         end
+--
+--         -- Mark the source line for adding a version after it
 --         skip_lines[module.source_line] = {
 --           is_source = true,
 --           source_value = module.source_value,
@@ -1183,12 +1201,22 @@ return M
 --     end
 --   end
 --
---   -- Process each line
+--   -- Variables to track blank line state
+--   local just_added_blank_line = false
+--
+--   -- Process each line to build the new file content
 --   for i, line in ipairs(lines) do
 --     if type(skip_lines[i]) == "table" and skip_lines[i].is_source then
 --       -- This is a source line for a registry module
---       -- Add the original source line
---       table.insert(new_lines, line)
+--       -- Add the original source line, but ensure proper double-space formatting
+--       local source_match = line:match(patterns.source_line)
+--       if source_match then
+--         -- Use the original source value but with consistent formatting
+--         table.insert(new_lines, skip_lines[i].indent .. '  source  = "' .. source_match .. '"')
+--       else
+--         -- Fallback if pattern doesn't match
+--         table.insert(new_lines, line)
+--       end
 --
 --       -- Add a new version line with the latest version constraint
 --       local latest_version, latest_major = get_latest_version_info(skip_lines[i].source_value)
@@ -1197,15 +1225,29 @@ return M
 --             and "~> 0." .. select(2, parse_version(latest_version))
 --             or "~> " .. latest_major .. ".0"
 --         table.insert(new_lines, skip_lines[i].indent .. '  version = "' .. new_version_constraint .. '"')
+--
+--         -- Always add exactly one blank line after version
+--         table.insert(new_lines, "")
+--         just_added_blank_line = true
+--
 --         modified = true
 --       end
 --     elseif skip_lines[i] == true then
---       -- This is a version line that should be skipped
---       -- Don't add it to new_lines
+--       -- This is a line that should be skipped (like an old version line or blank line)
 --       modified = true
 --     else
---       -- Regular line, just add it
---       table.insert(new_lines, line)
+--       -- This is a regular line to keep
+--
+--       -- If we just added a blank line and this line is also blank, skip it
+--       if just_added_blank_line and line:match("^%s*$") then
+--         just_added_blank_line = false
+--       else
+--         table.insert(new_lines, line)
+--         -- Reset the flag if we hit a non-empty line
+--         if not line:match("^%s*$") then
+--           just_added_blank_line = false
+--         end
+--       end
 --     end
 --   end
 --
