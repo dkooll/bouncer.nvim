@@ -496,10 +496,21 @@ local function process_file_for_all_modules(file_path)
           skip_lines[ver_line.line_number] = true
         end
 
-        -- Mark empty lines after version lines for removal
-        for _, ver_line in ipairs(module.version_lines) do
+        -- Mark empty lines after version lines and between source and version for removal
+        if #module.version_lines > 0 then
+          local min_version_line = math.huge
+          for _, ver_line in ipairs(module.version_lines) do
+            min_version_line = math.min(min_version_line, ver_line.line_number)
+          end
+
+          -- Mark empty lines between source and version for removal
+          for i = module.source_line + 1, min_version_line - 1 do
+            skip_lines[i] = true
+          end
+
+          -- Mark empty lines after the last version line
           local end_line = module.end_line or #lines
-          for i = ver_line.line_number + 1, end_line do
+          for i = module.version_lines[#module.version_lines].line_number + 1, end_line do
             if not lines[i]:match("^%s*$") and not lines[i]:match("^%s*#") then
               break
             else
@@ -510,7 +521,7 @@ local function process_file_for_all_modules(file_path)
 
         -- Mark empty lines after source if there are no version lines
         if #module.version_lines == 0 and module.source_line then
-          for i = module.source_line + 1, module.end_line do
+          for i = module.source_line + 1, module.end_line or #lines do
             if not lines[i]:match("^%s*$") and not lines[i]:match("^%s*#") then
               break
             else
@@ -686,7 +697,6 @@ function M.setup(opts)
 end
 
 return M
-
 -- local M = {}
 --
 -- -- Cache for module configurations to avoid repeated git commands
