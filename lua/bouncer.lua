@@ -218,7 +218,6 @@ local function process_file(file_path, mod_config, is_local)
   local new_lines = {}
   local block_indent = ""
   local source_line_index = nil
-  local version_line_index = nil
   local in_appropriate_module = false
   local brace_count = 0
 
@@ -268,37 +267,52 @@ local function process_file(file_path, mod_config, is_local)
     if brace_count == 0 then
       in_module_block = false
       in_appropriate_module = false
-      source_line_index = nil
-      version_line_index = nil
 
       -- If we're at the end of a module block and need to modify it
       if in_appropriate_module and source_line_index then
-        -- Remove the old source line
-        table.remove(new_lines, source_line_index)
+        local start_idx = source_line_index
+        local end_idx = #new_lines
 
-        -- Remove the old version line if it exists
-        if version_line_index and version_line_index > source_line_index then
-          version_line_index = version_line_index - 1 -- Adjust for the removed source line
-          table.remove(new_lines, version_line_index)
+        -- Find all version lines to remove (regardless of indentation)
+        local version_indices = {}
+        for j = start_idx, end_idx do
+          local check_line = new_lines[j]
+          if check_line and check_line:match(patterns.version_line) then
+            table.insert(version_indices, j)
+          end
         end
 
-        -- Insert new source and version lines with correct indentation
+        -- Remove all version lines (starting from the end to avoid index shifting)
+        for j = #version_indices, 1, -1 do
+          table.remove(new_lines, version_indices[j])
+        end
+
+        -- Remove the source line (index might have changed if version lines were removed)
+        for j = start_idx, #new_lines do
+          local check_line = new_lines[j]
+          if check_line and check_line:match(patterns.source_line) then
+            table.remove(new_lines, j)
+            source_line_index = j
+            break
+          end
+        end
+
+        -- Insert new source line with correct indentation
         if is_local then
           table.insert(new_lines, source_line_index, block_indent .. '  source = "../../"')
+          -- No version line for local sources
         else
-          table.insert(new_lines, source_line_index, string.format('%s  source  = "%s"',
+          table.insert(new_lines, source_line_index, string.format('%s  source = "%s"',
             block_indent, mod_config.registry_source))
 
           -- Add version constraint for registry source
-          if not is_local then
-            local latest_version, latest_major = get_latest_version_info(mod_config.registry_source)
-            if latest_version then
-              local new_version_constraint = latest_major == 0
-                  and "~> 0." .. select(2, parse_version(latest_version))
-                  or "~> " .. latest_major .. ".0"
-              table.insert(new_lines, source_line_index + 1,
-                string.format('%s  version = "%s"', block_indent, new_version_constraint))
-            end
+          local latest_version, latest_major = get_latest_version_info(mod_config.registry_source)
+          if latest_version then
+            local new_version_constraint = latest_major == 0
+                and "~> 0." .. select(2, parse_version(latest_version))
+                or "~> " .. latest_major .. ".0"
+            table.insert(new_lines, source_line_index + 1,
+              string.format('%s  version = "%s"', block_indent, new_version_constraint))
           end
         end
 
@@ -310,9 +324,9 @@ local function process_file(file_path, mod_config, is_local)
       goto continue
     end
 
-    -- Check if this is a source line
-    local source_match = line:match(patterns.source_line_exact)
-    if source_match then
+    -- Check if this is a source line (be more lenient with pattern matching)
+    local source_match = line:match(patterns.source_line)
+    if source_match and not line:match("^%s*#") then
       local current_source = source_match
 
       -- Check if this is the module we're looking for
@@ -321,11 +335,6 @@ local function process_file(file_path, mod_config, is_local)
         in_appropriate_module = true
         source_line_index = #new_lines + 1 -- Position where the source line would be added
       end
-    end
-
-    -- Check if this is a version line
-    if line:match(patterns.version_line_exact) then
-      version_line_index = #new_lines + 1 -- Position where the version line would be added
     end
 
     -- Add the current line to new_lines
