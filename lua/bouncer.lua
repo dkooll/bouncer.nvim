@@ -334,6 +334,8 @@ local function process_file(file_path, mod_config, is_local)
           -- This is a source line we need to modify
           if is_local then
             table.insert(new_lines, module.indent .. '  source  = "../../"')
+            -- Add a single blank line after source when switching to local
+            table.insert(new_lines, "")
           else
             table.insert(new_lines, module.indent .. '  source  = "' .. mod_config.registry_source .. '"')
 
@@ -344,6 +346,8 @@ local function process_file(file_path, mod_config, is_local)
                   and "~> 0." .. select(2, parse_version(latest_version))
                   or "~> " .. latest_major .. ".0"
               table.insert(new_lines, module.indent .. '  version = "' .. new_version_constraint .. '"')
+              -- Add a single blank line after version
+              table.insert(new_lines, "")
             end
           end
 
