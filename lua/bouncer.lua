@@ -117,7 +117,7 @@ local function get_latest_version_info(registry_source)
 
   if registry_config.is_private then
     local org, name, provider = source_no_subdir:match(string.format("^%s/([^/]+)/([^/]+)/([^/]+)$", registry_config
-    .host))
+      .host))
     if not (org and name and provider) then
       vim.notify("Invalid private registry source format: " .. registry_source, vim.log.levels.ERROR)
       return nil, nil
@@ -308,9 +308,9 @@ local function process_file(file_path, mod_config, is_local)
             (i == module.source_line) then
           -- This is a source line we need to modify
           if is_local then
-            table.insert(new_lines, module.indent .. '  source = "../../"')
+            table.insert(new_lines, module.indent .. '  source  = "../../"')
           else
-            table.insert(new_lines, module.indent .. '  source = "' .. mod_config.registry_source .. '"')
+            table.insert(new_lines, module.indent .. '  source  = "' .. mod_config.registry_source .. '"')
 
             -- Add version line only when switching to registry and only once
             local latest_version, latest_major = get_latest_version_info(mod_config.registry_source)
