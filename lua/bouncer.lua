@@ -278,8 +278,7 @@ local function process_file(file_path, mod_config, is_local)
   -- Second pass: modify the file based on the module analysis
   local modified = false
   local new_lines = {}
-  local skip_lines = {}           -- Lines to skip
-  local preserve_empty_lines = {} -- Track empty lines between source and version
+  local skip_lines = {} -- Lines to skip
 
   -- Prepare list of lines to modify/skip
   for _, module in ipairs(modules) do
@@ -290,18 +289,33 @@ local function process_file(file_path, mod_config, is_local)
       -- Mark source line for replacement
       skip_lines[module.source_line] = true
 
-      -- Identify and preserve empty lines between source and version
-      if #module.version_lines > 0 then
-        local min_version_line = math.huge
-        for _, ver_line in ipairs(module.version_lines) do
-          min_version_line = math.min(min_version_line, ver_line.line_number)
-          skip_lines[ver_line.line_number] = true
+      -- Mark all lines between source and the next attribute for removal (empty lines)
+      if module.source_line then
+        -- Find the next attribute after source and mark empty lines for skipping
+        for i = module.source_line + 1, module.end_line do
+          if not lines[i]:match("^%s*$") and not lines[i]:match("^%s*#") then
+            break
+          else
+            -- Mark empty lines to skip
+            skip_lines[i] = true
+          end
         end
+      end
 
-        -- Preserve empty lines between source and version
-        for i = module.source_line + 1, min_version_line - 1 do
-          if i <= #lines and lines[i]:match("^%s*$") then
-            preserve_empty_lines[i] = true
+      -- Mark all version lines for removal
+      for _, ver_line in ipairs(module.version_lines) do
+        skip_lines[ver_line.line_number] = true
+
+        -- Mark all lines between version and the next attribute for removal (empty lines)
+        local found_next = false
+        for i = ver_line.line_number + 1, module.end_line do
+          if not found_next then
+            if not lines[i]:match("^%s*$") and not lines[i]:match("^%s*#") then
+              found_next = true
+            else
+              -- Mark empty lines to skip
+              skip_lines[i] = true
+            end
           end
         end
       end
@@ -322,19 +336,8 @@ local function process_file(file_path, mod_config, is_local)
             table.insert(new_lines, module.indent .. '  source  = "../../"')
           else
             table.insert(new_lines, module.indent .. '  source  = "' .. mod_config.registry_source .. '"')
-          end
 
-          -- Add preserved empty lines after source
-          for j = module.source_line + 1, module.source_line + 10 do
-            if j <= #lines and lines[j]:match("^%s*$") then
-              table.insert(new_lines, lines[j])
-            else
-              break
-            end
-          end
-
-          -- Add version line only when switching to registry
-          if not is_local then
+            -- Add version line immediately after source when switching to registry
             local latest_version, latest_major = get_latest_version_info(mod_config.registry_source)
             if latest_version then
               local new_version_constraint = latest_major == 0
@@ -361,14 +364,11 @@ local function process_file(file_path, mod_config, is_local)
             modified = true
           else
             -- Not a source or version line, but still in the skip list?
-            -- This shouldn't happen, but add the line just in case
-            table.insert(new_lines, line)
+            -- This is an empty line that should be skipped
+            modified = true
           end
         end
       end
-    elseif preserve_empty_lines[i] then
-      -- These are already added in the source block handling
-      -- Skip them here to avoid duplicates
     else
       -- Regular line, just add it
       table.insert(new_lines, line)
