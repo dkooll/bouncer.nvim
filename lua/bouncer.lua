@@ -7,15 +7,10 @@ local registry_version_cache = {}
 
 -- Pre-compile patterns for better performance
 local patterns = {
-  -- More flexible module block pattern that captures the module name
   module_block = '(%s*)module%s*"([^"]*)"',
-  -- Pattern for closing braces that will match regardless of indentation
   closing_brace = '^%s*}',
-  -- Patterns for source and version lines that will match regardless of indentation
   source_line = '%s*source%s*=%s*"([^"]*)"',
-  source_line_exact = '^%s*source%s*=%s*"([^"]*)"',
   version_line = '%s*version%s*=%s*"([^"]*)"',
-  version_line_exact = '^%s*version%s*=%s*"([^"]*)"',
   version_constraint = "~>%s*(%d+)%.(%d+)",
 }
 
@@ -204,7 +199,7 @@ local function find_terraform_files()
   return files
 end
 
--- Improved process_file that handles inconsistent indentation
+-- Modified process_file that properly handles indentation issues
 local function process_file(file_path, mod_config, is_local)
   local lines = vim.fn.readfile(file_path)
   if not lines then
@@ -212,13 +207,10 @@ local function process_file(file_path, mod_config, is_local)
     return false
   end
 
-  local modified = false
+  -- First pass: analyze the file and track modules
+  local modules = {}
+  local current_module = nil
   local in_module_block = false
-  -- No need to track module name
-  local new_lines = {}
-  local block_indent = ""
-  local source_line_index = nil
-  local in_appropriate_module = false
   local brace_count = 0
 
   for i, line in ipairs(lines) do
@@ -227,120 +219,134 @@ local function process_file(file_path, mod_config, is_local)
       local indent, module_name = line:match(patterns.module_block)
       if indent and module_name then
         in_module_block = true
-        block_indent = indent
-        -- Module name not needed for processing
-        brace_count = 1
+        current_module = {
+          name = module_name,
+          start_line = i,
+          end_line = nil,
+          indent = indent,
+          source_line = nil,
+          source_value = nil,
+          version_lines = {}
+        }
 
-        -- Add the current line to new_lines
-        table.insert(new_lines, line)
+        -- Count opening brace if on the same line as the module declaration
+        if line:match("{") then
+          brace_count = brace_count + 1
+        end
+      end
+    else
+      -- Count braces to determine module block boundaries
+      local open_braces = line:gsub("[^{]", ""):len()
+      local close_braces = line:gsub("[^}]", ""):len()
+      brace_count = brace_count + open_braces - close_braces
 
-        -- Look ahead for opening brace if not on this line
-        if not line:match("{") then
-          local j = i + 1
-          while j <= #lines and not lines[j]:match("{") do
-            table.insert(new_lines, lines[j])
-            j = j + 1
+      -- Check for source and version lines
+      if brace_count > 0 and current_module ~= nil then
+        -- Don't process commented lines
+        if not line:match("^%s*#") then
+          -- Check for source line
+          local source = line:match(patterns.source_line)
+          if source then
+            current_module.source_line = i
+            current_module.source_value = source
           end
-          if j <= #lines then
-            table.insert(new_lines, lines[j])
-            brace_count = 1
+
+          -- Check for version line
+          local version = line:match(patterns.version_line)
+          if version and current_module ~= nil then
+            table.insert(current_module.version_lines, {
+              line_number = i,
+              value = version,
+              indent = line:match("^(%s*)") -- Capture the line's indentation
+            })
+          end
+        end
+      end
+
+      -- If we're leaving the module block
+      if brace_count == 0 then
+        in_module_block = false
+        if current_module then
+          current_module.end_line = i
+          table.insert(modules, current_module)
+          current_module = nil
+        end
+      end
+    end
+  end
+
+  -- Second pass: modify the file based on the module analysis
+  local modified = false
+  local new_lines = {}
+  local skip_lines = {} -- Lines to skip
+
+  -- Prepare list of lines to modify/skip
+  for _, module in ipairs(modules) do
+    local expected_source = mod_config.registry_source
+
+    -- Only process modules with matching source or local source
+    if module.source_value == expected_source or module.source_value == "../../" then
+      -- Mark source line for replacement
+      skip_lines[module.source_line] = true
+
+      -- Mark all version lines for removal if switching to local
+      -- or all version lines for replacement if switching to registry
+      for _, ver_line in ipairs(module.version_lines) do
+        skip_lines[ver_line.line_number] = true
+      end
+    end
+  end
+
+  -- Process lines
+  for i, line in ipairs(lines) do
+    if skip_lines[i] then
+      -- Find which module this line belongs to
+      for _, module in ipairs(modules) do
+        local expected_source = mod_config.registry_source
+
+        if (module.source_value == expected_source or module.source_value == "../../") and
+            (i == module.source_line) then
+          -- This is a source line we need to modify
+          if is_local then
+            table.insert(new_lines, module.indent .. '  source = "../../"')
           else
-            -- No opening brace found, reset module block state
-            in_module_block = false
+            table.insert(new_lines, module.indent .. '  source = "' .. mod_config.registry_source .. '"')
+
+            -- Add version line only when switching to registry and only once
+            local latest_version, latest_major = get_latest_version_info(mod_config.registry_source)
+            if latest_version then
+              local new_version_constraint = latest_major == 0
+                  and "~> 0." .. select(2, parse_version(latest_version))
+                  or "~> " .. latest_major .. ".0"
+              table.insert(new_lines, module.indent .. '  version = "' .. new_version_constraint .. '"')
+            end
+          end
+          modified = true
+        elseif (module.source_value == expected_source or module.source_value == "../../") then
+          -- Check if this is a version line for a module we're processing
+          local is_version_line = false
+          for _, ver_line in ipairs(module.version_lines) do
+            if i == ver_line.line_number then
+              is_version_line = true
+              break
+            end
+          end
+
+          -- Skip version lines completely (they're handled with the source line)
+          if is_version_line then
+            -- Do nothing, just skip
+            modified = true
+          else
+            -- Not a source or version line, but still in the skip list?
+            -- This shouldn't happen, but add the line just in case
+            table.insert(new_lines, line)
           end
         end
-
-        goto continue
       end
-
-      -- If not in a module block, just add the line
+    else
+      -- Regular line, just add it
       table.insert(new_lines, line)
-      goto continue
     end
-
-    -- Track brace count to properly detect module block boundaries
-    local open_braces = select(2, line:gsub("{", ""))
-    local close_braces = select(2, line:gsub("}", ""))
-    brace_count = brace_count + open_braces - close_braces
-
-    -- Check if we're leaving the module block
-    if brace_count == 0 then
-      in_module_block = false
-      in_appropriate_module = false
-
-      -- If we're at the end of a module block and need to modify it
-      if in_appropriate_module and source_line_index then
-        local start_idx = source_line_index
-        local end_idx = #new_lines
-
-        -- Find all version lines to remove (regardless of indentation)
-        local version_indices = {}
-        for j = start_idx, end_idx do
-          local check_line = new_lines[j]
-          if check_line and check_line:match(patterns.version_line) then
-            table.insert(version_indices, j)
-          end
-        end
-
-        -- Remove all version lines (starting from the end to avoid index shifting)
-        for j = #version_indices, 1, -1 do
-          table.remove(new_lines, version_indices[j])
-        end
-
-        -- Remove the source line (index might have changed if version lines were removed)
-        for j = start_idx, #new_lines do
-          local check_line = new_lines[j]
-          if check_line and check_line:match(patterns.source_line) then
-            table.remove(new_lines, j)
-            source_line_index = j
-            break
-          end
-        end
-
-        -- Insert new source line with correct indentation
-        if is_local then
-          table.insert(new_lines, source_line_index, block_indent .. '  source = "../../"')
-          -- No version line for local sources
-        else
-          table.insert(new_lines, source_line_index, string.format('%s  source = "%s"',
-            block_indent, mod_config.registry_source))
-
-          -- Add version constraint for registry source
-          local latest_version, latest_major = get_latest_version_info(mod_config.registry_source)
-          if latest_version then
-            local new_version_constraint = latest_major == 0
-                and "~> 0." .. select(2, parse_version(latest_version))
-                or "~> " .. latest_major .. ".0"
-            table.insert(new_lines, source_line_index + 1,
-              string.format('%s  version = "%s"', block_indent, new_version_constraint))
-          end
-        end
-
-        modified = true
-      end
-
-      -- Add the closing brace line
-      table.insert(new_lines, line)
-      goto continue
-    end
-
-    -- Check if this is a source line (be more lenient with pattern matching)
-    local source_match = line:match(patterns.source_line)
-    if source_match and not line:match("^%s*#") then
-      local current_source = source_match
-
-      -- Check if this is the module we're looking for
-      local expected_source = mod_config.registry_source
-      if current_source == expected_source or current_source == "../../" then
-        in_appropriate_module = true
-        source_line_index = #new_lines + 1 -- Position where the source line would be added
-      end
-    end
-
-    -- Add the current line to new_lines
-    table.insert(new_lines, line)
-
-    ::continue::
   end
 
   if modified then
@@ -354,7 +360,7 @@ local function process_file(file_path, mod_config, is_local)
   return false
 end
 
--- Improved process_file_for_all_modules that handles inconsistent indentation
+-- Improved process_file_for_all_modules function
 local function process_file_for_all_modules(file_path)
   local lines = vim.fn.readfile(file_path)
   if not lines then
@@ -362,129 +368,131 @@ local function process_file_for_all_modules(file_path)
     return false
   end
 
-  local modified = false
+  -- First pass: analyze the file and track all modules
+  local modules = {}
+  local current_module = nil
   local in_module_block = false
-  local new_lines = {}
-  local block_indent = ""
   local brace_count = 0
 
-  -- Variables to track source and version lines within a module
-  local module_sources = {}
-  local module_versions = {}
-  local current_module_index = 0
-
-  for _, line in ipairs(lines) do
+  for i, line in ipairs(lines) do
     -- Check for module block start
     if not in_module_block then
       local indent, module_name = line:match(patterns.module_block)
       if indent and module_name then
         in_module_block = true
-        block_indent = indent
-        brace_count = 1
-        current_module_index = #new_lines + 1
+        current_module = {
+          name = module_name,
+          start_line = i,
+          end_line = nil,
+          indent = indent,
+          source_line = nil,
+          source_value = nil,
+          version_lines = {}
+        }
 
-        -- Initialize tracking for this module
-        module_sources[current_module_index] = nil
-        module_versions[current_module_index] = nil
+        -- Count opening brace if on the same line as the module declaration
+        if line:match("{") then
+          brace_count = brace_count + 1
+        end
       end
     else
-      -- Track brace count
-      local open_braces = select(2, line:gsub("{", ""))
-      local close_braces = select(2, line:gsub("}", ""))
+      -- Count braces to determine module block boundaries
+      local open_braces = line:gsub("[^{]", ""):len()
+      local close_braces = line:gsub("[^}]", ""):len()
       brace_count = brace_count + open_braces - close_braces
 
-      -- Check if we're leaving the module block
-      if brace_count == 0 then
-        in_module_block = false
-
-        -- If we found a registry source but no version, add the version
-        if module_sources[current_module_index] and not module_versions[current_module_index] then
-          local source = module_sources[current_module_index].source
-          local source_index = module_sources[current_module_index].index
-
-          local source_pattern
-          if registry_config.is_private then
-            source_pattern = "^" .. registry_config.host .. "/" .. registry_config.organization .. "/"
-          else
-            source_pattern = "^" .. registry_config.namespace .. "/"
+      -- Check for source and version lines
+      if brace_count > 0 and current_module ~= nil then
+        -- Don't process commented lines
+        if not line:match("^%s*#") then
+          -- Check for source line
+          local source = line:match(patterns.source_line)
+          if source then
+            current_module.source_line = i
+            current_module.source_value = source
           end
 
-          if source:match(source_pattern) then
-            local latest_version, latest_major = get_latest_version_info(source)
-            if latest_version then
-              local new_version_constraint = latest_major == 0
-                  and "~> 0." .. select(2, parse_version(latest_version))
-                  or "~> " .. latest_major .. ".0"
-
-              -- Insert the version line after the source line
-              table.insert(new_lines, source_index + 1,
-                string.format('%s  version = "%s"', block_indent, new_version_constraint))
-
-              -- Adjust line indices for subsequent insertions
-              for k, v in pairs(module_sources) do
-                if v.index > source_index then
-                  module_sources[k].index = v.index + 1
-                end
-              end
-              for k, v in pairs(module_versions) do
-                if v > source_index then
-                  module_versions[k] = v + 1
-                end
-              end
-
-              modified = true
-            end
+          -- Check for version line
+          local version = line:match(patterns.version_line)
+          if version then
+            table.insert(current_module.version_lines, {
+              line_number = i,
+              value = version,
+              indent = line:match("^(%s*)")
+            })
           end
         end
       end
 
-      -- Track source and version lines
-      if in_module_block then
-        -- Check if line is a source definition and not commented out
-        if line:match(patterns.source_line_exact) and not line:match('^%s*#') then
-          local source = line:match(patterns.source_line)
-          if source then
-            module_sources[current_module_index] = {
-              source = source,
-              index = #new_lines + 1
-            }
-          end
-        end
-
-        -- Check if line is a version definition and not commented out
-        if line:match(patterns.version_line_exact) and not line:match('^%s*#') then
-          module_versions[current_module_index] = #new_lines + 1
-
-          -- Check if we need to update an existing version line
-          if module_sources[current_module_index] then
-            local source = module_sources[current_module_index].source
-
-            local source_pattern
-            if registry_config.is_private then
-              source_pattern = "^" .. registry_config.host .. "/" .. registry_config.organization .. "/"
-            else
-              source_pattern = "^" .. registry_config.namespace .. "/"
-            end
-
-            if source:match(source_pattern) then
-              local latest_version, latest_major = get_latest_version_info(source)
-              if latest_version then
-                local new_version_constraint = latest_major == 0
-                    and "~> 0." .. select(2, parse_version(latest_version))
-                    or "~> " .. latest_major .. ".0"
-
-                -- Replace the existing version line
-                line = string.format('%s  version = "%s"', block_indent, new_version_constraint)
-                modified = true
-              end
-            end
-          end
+      -- If we're leaving the module block
+      if brace_count == 0 then
+        in_module_block = false
+        if current_module then
+          current_module.end_line = i
+          table.insert(modules, current_module)
+          current_module = nil
         end
       end
     end
+  end
 
-    -- Add the current line to new_lines
-    table.insert(new_lines, line)
+  -- Second pass: update version lines for registry modules
+  local modified = false
+  local new_lines = {}
+  local skip_lines = {}
+
+  -- Find registry modules and mark lines for modification
+  for _, module in ipairs(modules) do
+    if module.source_value then
+      local source_pattern
+      if registry_config.is_private then
+        source_pattern = "^" .. registry_config.host .. "/" .. registry_config.organization .. "/"
+      else
+        source_pattern = "^" .. registry_config.namespace .. "/"
+      end
+
+      -- Check if this is a registry module
+      if module.source_value:match(source_pattern) then
+        -- Mark all existing version lines for removal
+        for _, ver_line in ipairs(module.version_lines) do
+          skip_lines[ver_line.line_number] = true
+        end
+
+        -- Mark the source line index for adding a version after it
+        skip_lines[module.source_line] = {
+          is_source = true,
+          source_value = module.source_value,
+          indent = module.indent,
+          has_version = #module.version_lines > 0
+        }
+      end
+    end
+  end
+
+  -- Process each line
+  for i, line in ipairs(lines) do
+    if type(skip_lines[i]) == "table" and skip_lines[i].is_source then
+      -- This is a source line for a registry module
+      -- Add the original source line
+      table.insert(new_lines, line)
+
+      -- Add a new version line with the latest version constraint
+      local latest_version, latest_major = get_latest_version_info(skip_lines[i].source_value)
+      if latest_version then
+        local new_version_constraint = latest_major == 0
+            and "~> 0." .. select(2, parse_version(latest_version))
+            or "~> " .. latest_major .. ".0"
+        table.insert(new_lines, skip_lines[i].indent .. '  version = "' .. new_version_constraint .. '"')
+        modified = true
+      end
+    elseif skip_lines[i] == true then
+      -- This is a version line that should be skipped
+      -- Don't add it to new_lines
+      modified = true
+    else
+      -- Regular line, just add it
+      table.insert(new_lines, line)
+    end
   end
 
   if modified then
