@@ -253,7 +253,7 @@ local function process_file(file_path, mod_config, is_local)
 
           -- Check for version line
           local version = line:match(patterns.version_line)
-          if version and current_module ~= nil then
+          if version then
             table.insert(current_module.version_lines, {
               line_number = i,
               value = version,
@@ -289,6 +289,11 @@ local function process_file(file_path, mod_config, is_local)
       -- Mark source line for replacement
       skip_lines[module.source_line] = true
 
+      -- Mark all version lines for removal
+      for _, ver_line in ipairs(module.version_lines) do
+        skip_lines[ver_line.line_number] = true
+      end
+
       -- Mark all lines between source and the next attribute for removal (empty lines)
       if module.source_line then
         -- Find the next attribute after source and mark empty lines for skipping
@@ -301,26 +306,11 @@ local function process_file(file_path, mod_config, is_local)
           end
         end
       end
-
-      -- Mark all version lines for removal
-      for _, ver_line in ipairs(module.version_lines) do
-        skip_lines[ver_line.line_number] = true
-
-        -- Mark all lines between version and the next attribute for removal (empty lines)
-        local found_next = false
-        for i = ver_line.line_number + 1, module.end_line do
-          if not found_next then
-            if not lines[i]:match("^%s*$") and not lines[i]:match("^%s*#") then
-              found_next = true
-            else
-              -- Mark empty lines to skip
-              skip_lines[i] = true
-            end
-          end
-        end
-      end
     end
   end
+
+  -- Variables to track blank line state
+  local just_added_blank_line = false
 
   -- Process lines
   for i, line in ipairs(lines) do
@@ -334,8 +324,10 @@ local function process_file(file_path, mod_config, is_local)
           -- This is a source line we need to modify
           if is_local then
             table.insert(new_lines, module.indent .. '  source  = "../../"')
+
             -- Add a single blank line after source when switching to local
             table.insert(new_lines, "")
+            just_added_blank_line = true
           else
             table.insert(new_lines, module.indent .. '  source  = "' .. mod_config.registry_source .. '"')
 
@@ -349,34 +341,26 @@ local function process_file(file_path, mod_config, is_local)
 
               -- Always add exactly one blank line after version
               table.insert(new_lines, "")
+              just_added_blank_line = true
             end
           end
 
           modified = true
-        elseif (module.source_value == expected_source or module.source_value == "../../") then
-          -- Check if this is a version line for a module we're processing
-          local is_version_line = false
-          for _, ver_line in ipairs(module.version_lines) do
-            if i == ver_line.line_number then
-              is_version_line = true
-              break
-            end
-          end
-
-          -- Skip version lines completely (they're handled with the source line)
-          if is_version_line then
-            -- Do nothing, just skip
-            modified = true
-          else
-            -- Not a source or version line, but still in the skip list?
-            -- This is an empty line that should be skipped
-            modified = true
-          end
         end
       end
     else
-      -- Regular line, just add it
-      table.insert(new_lines, line)
+      -- This is a regular line we should keep
+
+      -- If we just added a blank line and this line is also blank, skip it
+      if just_added_blank_line and line:match("^%s*$") then
+        just_added_blank_line = false
+      else
+        table.insert(new_lines, line)
+        -- Reset the flag if we hit a non-empty line
+        if not line:match("^%s*$") then
+          just_added_blank_line = false
+        end
+      end
     end
   end
 
@@ -534,7 +518,10 @@ local function process_file_for_all_modules(file_path)
     end
   end
 
-  -- Process each line
+  -- Variables to track blank line state
+  local just_added_blank_line = false
+
+  -- Process each line to build the new file content
   for i, line in ipairs(lines) do
     if type(skip_lines[i]) == "table" and skip_lines[i].is_source then
       -- This is a source line for a registry module
@@ -556,24 +543,28 @@ local function process_file_for_all_modules(file_path)
             or "~> " .. latest_major .. ".0"
         table.insert(new_lines, skip_lines[i].indent .. '  version = "' .. new_version_constraint .. '"')
 
-        -- Only add a blank line if there isn't already one
-        local next_line_idx = i + 1
-        if next_line_idx <= #lines then
-          local next_line = lines[next_line_idx]
-          if not next_line:match("^%s*$") then
-            -- Next line is not blank, so add a blank line
-            table.insert(new_lines, "")
-          end
-        end
+        -- Always add exactly one blank line after version
+        table.insert(new_lines, "")
+        just_added_blank_line = true
 
         modified = true
       end
     elseif skip_lines[i] == true then
-      -- This is a line that should be skipped
+      -- This is a line that should be skipped (like an old version line or blank line)
       modified = true
     else
-      -- Regular line, just add it
-      table.insert(new_lines, line)
+      -- This is a regular line to keep
+
+      -- If we just added a blank line and this line is also blank, skip it
+      if just_added_blank_line and line:match("^%s*$") then
+        just_added_blank_line = false
+      else
+        table.insert(new_lines, line)
+        -- Reset the flag if we hit a non-empty line
+        if not line:match("^%s*$") then
+          just_added_blank_line = false
+        end
+      end
     end
   end
 
