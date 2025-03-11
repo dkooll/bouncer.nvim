@@ -8,6 +8,7 @@ local version_cache = {}
 
 -- Notification collection
 local pending_notifications = {}
+local debug_mode = true -- Enable to print debug info
 
 -- Pre-compile patterns for better performance
 local patterns = {
@@ -19,15 +20,35 @@ local patterns = {
 
 -- Notification handling functions
 local function collect_notification(message, level)
+  level = level or vim.log.levels.INFO
+
+  -- Immediately show critical errors (ensures they're visible)
+  if level == vim.log.levels.ERROR then
+    vim.notify(message, level)
+  end
+
+  -- Always collect for batch display later
   table.insert(pending_notifications, {
     message = message,
-    level = level or vim.log.levels.INFO
+    level = level
   })
+
+  -- Direct debug output for troubleshooting
+  if debug_mode then
+    print("NOTIFICATION COLLECTED: " .. message)
+  end
 end
 
 local function show_collected_notifications()
   if #pending_notifications == 0 then
+    if debug_mode then
+      print("No notifications to show")
+    end
     return
+  end
+
+  if debug_mode then
+    print("SHOWING " .. #pending_notifications .. " NOTIFICATIONS")
   end
 
   -- Group notifications by message
@@ -39,6 +60,9 @@ local function show_collected_notifications()
   -- Show each unique notification
   for message, level in pairs(unique_messages) do
     vim.notify(message, level)
+    if debug_mode then
+      print("DISPLAYED: " .. message)
+    end
   end
 
   -- Clear pending notifications
@@ -121,6 +145,10 @@ end
 local function get_latest_version_info(registry_source, silent)
   silent = silent or false -- Default to showing notifications
 
+  if debug_mode then
+    print("Checking module: " .. registry_source .. " (silent=" .. tostring(silent) .. ")")
+  end
+
   if registry_version_cache[registry_source] then
     return unpack(registry_version_cache[registry_source])
   end
@@ -147,16 +175,18 @@ local function get_latest_version_info(registry_source, silent)
     timeout = 5000
   })
 
+  if debug_mode then
+    print("API Response: " .. (result and tostring(result.status) or "No response"))
+  end
+
   if result and result.status == 200 and result.body then
     local ok, data = pcall(vim.fn.json_decode, result.body)
     if ok and data and data.modules and data.modules[1] and data.modules[1].versions then
       if #data.modules[1].versions == 0 then
-        if not silent then
-          collect_notification(
-            string.format("Module %s exists but has no versions published", registry_source),
-            vim.log.levels.WARN
-          )
-        end
+        collect_notification(
+          string.format("Module %s exists but has no versions published", registry_source),
+          vim.log.levels.WARN
+        )
         return nil, nil, true
       end
 
@@ -176,21 +206,18 @@ local function get_latest_version_info(registry_source, silent)
       end
     end
   elseif result and result.status == 404 then
-    if not silent then
-      collect_notification(
-        string.format("Module %s not found in registry", registry_source),
-        vim.log.levels.ERROR
-      )
-    end
+    -- Always notify when a module is not found, regardless of silent flag
+    collect_notification(
+      string.format("Module %s not found in registry", registry_source),
+      vim.log.levels.ERROR
+    )
     return nil, nil, true
   else
-    if not silent then
-      collect_notification(
-        string.format("Failed to fetch latest version for %s: %s",
-          registry_source, (result and tostring(result.status) or "No response")),
-        vim.log.levels.ERROR
-      )
-    end
+    collect_notification(
+      string.format("Failed to fetch latest version for %s: %s",
+        registry_source, (result and tostring(result.status) or "No response")),
+      vim.log.levels.ERROR
+    )
     return nil, nil, true
   end
 
@@ -482,8 +509,8 @@ local function process_file_for_all_modules(file_path)
       local is_registry_module = module.source_value:match(source_pattern) ~= nil
 
       if is_registry_module then
-        -- Check if this module actually exists in the registry (silently)
-        local _, _, module_not_found = get_latest_version_info(module.source_value, true)
+        -- Check if this module actually exists in the registry (NOT silently)
+        local _, _, module_not_found = get_latest_version_info(module.source_value, false)
 
         -- Always process the module, even if it doesn't exist
         -- Mark all existing version lines for removal
@@ -503,7 +530,7 @@ local function process_file_for_all_modules(file_path)
           not_found = module_not_found
         }
 
-        -- Collect missing module names without immediate notification
+        -- Make sure we have a clear message about keeping versions
         if module_not_found then
           collect_notification(
             string.format("Module %s not found in registry - keeping existing version if present",
@@ -678,6 +705,10 @@ end
 -- Setup function
 function M.setup(opts)
   opts = opts or {}
+
+  if opts.debug then
+    debug_mode = true
+  end
 
   if opts.namespace then
     registry_config = {
