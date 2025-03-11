@@ -305,11 +305,29 @@ local function process_file(file_path, mod_config, is_local)
   -- Prepare list of lines to modify/skip
   for _, module in ipairs(modules) do
     local expected_source = mod_config.registry_source
+    local module_not_found = false
 
     -- Only process modules with matching source or local source
     if module.source_value == expected_source or module.source_value == "../../" then
+      -- Check if module exists when switching to registry
+      if is_local == false then
+        local _, _, not_found = get_latest_version_info(expected_source)
+        module_not_found = not_found or false
+        if module_not_found then
+          vim.notify(
+            string.format("Module %s not found in registry - will keep existing version if present",
+              expected_source),
+            vim.log.levels.WARN
+          )
+        end
+      end
+
       -- Mark source line for replacement
-      skip_lines[module.source_line] = true
+      skip_lines[module.source_line] = {
+        replace_source = true,
+        is_local = is_local,
+        not_found = module_not_found
+      }
 
       -- Mark all version lines for removal
       for _, ver_line in ipairs(module.version_lines) do
@@ -326,7 +344,7 @@ local function process_file(file_path, mod_config, is_local)
 
   -- Process lines
   for i, line in ipairs(lines) do
-    if skip_lines[i] then
+    if type(skip_lines[i]) == "table" and skip_lines[i].replace_source then
       -- Find which module this line belongs to
       for _, module in ipairs(modules) do
         local expected_source = mod_config.registry_source
@@ -334,7 +352,7 @@ local function process_file(file_path, mod_config, is_local)
         if (module.source_value == expected_source or module.source_value == "../../") and
             (i == module.source_line) then
           -- This is a source line we need to modify
-          if is_local then
+          if skip_lines[i].is_local then
             table.insert(new_lines, module.indent .. '  source  = "../../"')
 
             -- Add a single blank line after source when switching to local
@@ -344,42 +362,34 @@ local function process_file(file_path, mod_config, is_local)
             table.insert(new_lines, module.indent .. '  source  = "' .. mod_config.registry_source .. '"')
 
             -- Add version line immediately after source when switching to registry
-            local latest_version, latest_major, module_not_found = get_latest_version_info(mod_config.registry_source)
-            if latest_version then
-              local new_version_constraint = latest_major == 0
-                  and "~> 0." .. select(2, parse_version(latest_version))
-                  or "~> " .. latest_major .. ".0"
-              table.insert(new_lines, module.indent .. '  version = "' .. new_version_constraint .. '"')
-
-              -- Always add exactly one blank line after version
-              table.insert(new_lines, "")
-              just_added_blank_line = true
-            else
-              if module_not_found then
-                -- Module doesn't exist but we still need to add a clear notification
-                vim.notify(
-                  string.format("Module %s not found in registry - keeping existing version constraint if present",
-                    mod_config.registry_source),
-                  vim.log.levels.WARN
-                )
-
-                -- If there were existing version lines, keep the first one
-                if module and #module.version_lines > 0 then
-                  -- Find and keep the first version constraint
-                  local ver_line = module.version_lines[1]
-                  table.insert(new_lines, module.indent .. '  version = "' .. ver_line.value .. '"')
-                end
+            if skip_lines[i].not_found then
+              -- If module doesn't exist but had a version constraint, keep it
+              if #module.version_lines > 0 then
+                local ver_line = module.version_lines[1]
+                table.insert(new_lines, module.indent .. '  version = "' .. ver_line.value .. '"')
               end
-
-              -- Add a blank line anyway
-              table.insert(new_lines, "")
-              just_added_blank_line = true
+            else
+              -- Normal case - module exists in registry
+              local latest_version, latest_major = get_latest_version_info(mod_config.registry_source)
+              if latest_version then
+                local new_version_constraint = latest_major == 0
+                    and "~> 0." .. select(2, parse_version(latest_version))
+                    or "~> " .. latest_major .. ".0"
+                table.insert(new_lines, module.indent .. '  version = "' .. new_version_constraint .. '"')
+              end
             end
+
+            -- Always add exactly one blank line after source/version
+            table.insert(new_lines, "")
+            just_added_blank_line = true
           end
 
           modified = true
         end
       end
+    elseif skip_lines[i] == true then
+      -- Skip this line (old version line or blank line)
+      modified = true
     else
       -- This is a regular line we should keep
 
@@ -426,10 +436,15 @@ local function process_file_for_all_modules(file_path)
   -- Find registry modules and mark lines for modification
   for _, module in ipairs(modules) do
     if module.source_value then
+      -- Check if this is a registry module by trying to match the namespace pattern
       local source_pattern = "^" .. registry_config.namespace .. "/"
+      local is_registry_module = module.source_value:match(source_pattern) ~= nil
 
-      -- Check if this is a registry module
-      if module.source_value:match(source_pattern) then
+      if is_registry_module then
+        -- Check if this module actually exists in the registry
+        local _, _, module_not_found = get_latest_version_info(module.source_value)
+
+        -- Always process the module, even if it doesn't exist
         -- Mark all existing version lines for removal
         for _, ver_line in ipairs(module.version_lines) do
           skip_lines[ver_line.line_number] = true
@@ -438,13 +453,23 @@ local function process_file_for_all_modules(file_path)
         -- Mark blank lines for removal
         skip_lines = mark_blank_lines(module, lines, skip_lines)
 
-        -- Mark the source line for adding a version after it
+        -- Mark the source line for processing
         skip_lines[module.source_line] = {
           is_source = true,
           source_value = module.source_value,
           indent = module.indent,
-          has_version = #module.version_lines > 0
+          has_version = #module.version_lines > 0,
+          not_found = module_not_found
         }
+
+        -- Show a notification immediately if module not found
+        if module_not_found then
+          vim.notify(
+            string.format("Module %s not found in registry - will keep existing version if present",
+              module.source_value),
+            vim.log.levels.WARN
+          )
+        end
       end
     end
   end
