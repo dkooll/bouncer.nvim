@@ -8,9 +8,15 @@ local version_cache = {}
 
 -- Notification collection
 local pending_notifications = {}
-local debug_mode = true -- Enable to print debug info
+local debug_mode = false  -- Set to true via setup for debugging
 
--- Pre-compile patterns for better performance
+-- Print debug info without requiring Enter press
+local function debug_print(message)
+  if debug_mode then
+    -- Use this style to avoid "Press ENTER" prompts
+    vim.api.nvim_echo({{message, "None"}}, false, {})
+  end
+end
 local patterns = {
   module_block = '(%s*)module%s*"([^"]*)"',
   source_line = '%s*source%s*=%s*"([^"]*)"',
@@ -22,11 +28,6 @@ local patterns = {
 local function collect_notification(message, level)
   level = level or vim.log.levels.INFO
 
-  -- Immediately show critical errors (ensures they're visible)
-  if level == vim.log.levels.ERROR then
-    vim.notify(message, level)
-  end
-
   -- Always collect for batch display later
   table.insert(pending_notifications, {
     message = message,
@@ -34,22 +35,16 @@ local function collect_notification(message, level)
   })
 
   -- Direct debug output for troubleshooting
-  if debug_mode then
-    print("NOTIFICATION COLLECTED: " .. message)
-  end
+  debug_print("NOTIFICATION COLLECTED: " .. message)
 end
 
 local function show_collected_notifications()
   if #pending_notifications == 0 then
-    if debug_mode then
-      print("No notifications to show")
-    end
+    debug_print("No notifications to show")
     return
   end
 
-  if debug_mode then
-    print("SHOWING " .. #pending_notifications .. " NOTIFICATIONS")
-  end
+  debug_print("SHOWING " .. #pending_notifications .. " NOTIFICATIONS")
 
   -- Group notifications by message
   local unique_messages = {}
@@ -60,9 +55,7 @@ local function show_collected_notifications()
   -- Show each unique notification
   for message, level in pairs(unique_messages) do
     vim.notify(message, level)
-    if debug_mode then
-      print("DISPLAYED: " .. message)
-    end
+    debug_print("DISPLAYED: " .. message)
   end
 
   -- Clear pending notifications
@@ -145,9 +138,7 @@ end
 local function get_latest_version_info(registry_source, silent)
   silent = silent or false -- Default to showing notifications
 
-  if debug_mode then
-    print("Checking module: " .. registry_source .. " (silent=" .. tostring(silent) .. ")")
-  end
+  debug_print("Checking module: " .. registry_source .. " (silent=" .. tostring(silent) .. ")")
 
   if registry_version_cache[registry_source] then
     return unpack(registry_version_cache[registry_source])
@@ -175,9 +166,7 @@ local function get_latest_version_info(registry_source, silent)
     timeout = 5000
   })
 
-  if debug_mode then
-    print("API Response: " .. (result and tostring(result.status) or "No response"))
-  end
+  debug_print("API Response: " .. (result and tostring(result.status) or "No response"))
 
   if result and result.status == 200 and result.body then
     local ok, data = pcall(vim.fn.json_decode, result.body)
@@ -206,10 +195,10 @@ local function get_latest_version_info(registry_source, silent)
       end
     end
   elseif result and result.status == 404 then
-    -- Always notify when a module is not found, regardless of silent flag
+    -- Module not found notification
     collect_notification(
       string.format("Module %s not found in registry", registry_source),
-      vim.log.levels.ERROR
+      vim.log.levels.WARN
     )
     return nil, nil, true
   else
@@ -384,7 +373,7 @@ local function process_file(file_path, mod_config, is_local)
           -- Add to notifications
           collect_notification(
             string.format("Module %s not found in registry - will keep existing version if present",
-              expected_source),
+            expected_source),
             vim.log.levels.WARN
           )
         end
@@ -534,7 +523,7 @@ local function process_file_for_all_modules(file_path)
         if module_not_found then
           collect_notification(
             string.format("Module %s not found in registry - keeping existing version if present",
-              module.source_value),
+            module.source_value),
             vim.log.levels.WARN
           )
         end
@@ -658,6 +647,9 @@ end
 -- Create user commands
 local function create_commands()
   vim.api.nvim_create_user_command("BounceModuleToLocal", function()
+    -- Reset pending notifications
+    pending_notifications = {}
+
     local ok, module_config = pcall(get_module_config)
     if not ok then
       collect_notification("Failed to get module config: " .. module_config, vim.log.levels.ERROR)
@@ -675,6 +667,9 @@ local function create_commands()
   end, {})
 
   vim.api.nvim_create_user_command("BounceModuleToRegistry", function()
+    -- Reset pending notifications
+    pending_notifications = {}
+
     local ok, module_config = pcall(get_module_config)
     if not ok then
       collect_notification("Failed to get module config: " .. module_config, vim.log.levels.ERROR)
@@ -692,6 +687,9 @@ local function create_commands()
   end, {})
 
   vim.api.nvim_create_user_command("BounceModulesToRegistry", function()
+    -- Reset pending notifications
+    pending_notifications = {}
+
     local files = find_terraform_files()
     if #files == 0 then
       collect_notification("No Terraform files found", vim.log.levels.WARN)
