@@ -291,7 +291,7 @@ local function process_file(file_path, mod_config, is_local)
   local lines = vim.fn.readfile(file_path)
   if not lines then
     vim.notify("Failed to read file: " .. file_path, vim.log.levels.ERROR)
-    return false
+    return false, {}
   end
 
   -- Analyze the terraform file
@@ -301,6 +301,7 @@ local function process_file(file_path, mod_config, is_local)
   local modified = false
   local new_lines = {}
   local skip_lines = {} -- Lines to skip
+  local missing_modules = {}
 
   -- Prepare list of lines to modify/skip
   for _, module in ipairs(modules) do
@@ -314,11 +315,8 @@ local function process_file(file_path, mod_config, is_local)
         local _, _, not_found = get_latest_version_info(expected_source)
         module_not_found = not_found or false
         if module_not_found then
-          vim.notify(
-            string.format("Module %s not found in registry - will keep existing version if present",
-              expected_source),
-            vim.log.levels.WARN
-          )
+          -- Collect missing module names but don't notify yet
+          table.insert(missing_modules, expected_source)
         end
       end
 
@@ -409,12 +407,12 @@ local function process_file(file_path, mod_config, is_local)
   if modified then
     if vim.fn.writefile(new_lines, file_path) == -1 then
       vim.notify("Failed to write file: " .. file_path, vim.log.levels.ERROR)
-      return false
+      return false, missing_modules
     end
-    return true
+    return true, missing_modules
   end
 
-  return false
+  return false, missing_modules
 end
 
 -- Process a file for all modules
@@ -422,7 +420,7 @@ local function process_file_for_all_modules(file_path)
   local lines = vim.fn.readfile(file_path)
   if not lines then
     vim.notify("Failed to read file: " .. file_path, vim.log.levels.ERROR)
-    return false
+    return false, {}
   end
 
   -- Analyze the terraform file
@@ -432,6 +430,7 @@ local function process_file_for_all_modules(file_path)
   local modified = false
   local new_lines = {}
   local skip_lines = {}
+  local missing_modules = {}
 
   -- Find registry modules and mark lines for modification
   for _, module in ipairs(modules) do
@@ -462,13 +461,9 @@ local function process_file_for_all_modules(file_path)
           not_found = module_not_found
         }
 
-        -- Show a notification immediately if module not found
+        -- Collect missing module names but don't notify yet
         if module_not_found then
-          vim.notify(
-            string.format("Module %s not found in registry - will keep existing version if present",
-              module.source_value),
-            vim.log.levels.WARN
-          )
+          table.insert(missing_modules, module.source_value)
         end
       end
     end
@@ -557,12 +552,12 @@ local function process_file_for_all_modules(file_path)
   if modified then
     if vim.fn.writefile(new_lines, file_path) == -1 then
       vim.notify("Failed to write file: " .. file_path, vim.log.levels.ERROR)
-      return false
+      return false, missing_modules
     end
-    return true
+    return true, missing_modules
   end
 
-  return false
+  return false, missing_modules
 end
 
 -- Process multiple files in parallel
@@ -570,20 +565,31 @@ local function process_files_parallel(files_to_process, processor_fn, args)
   local modified_count = 0
   local completed = 0
   local total = #files_to_process
+  local missing_modules = {}
 
   for _, file in ipairs(files_to_process) do
     vim.schedule(function()
-      local success
+      local success, file_missing_modules
       if args then
-        success = processor_fn(file, args.module_config, args.is_local)
+        success, file_missing_modules = processor_fn(file, args.module_config, args.is_local)
       else
-        success = processor_fn(file)
+        success, file_missing_modules = processor_fn(file)
       end
 
       if success then
         modified_count = modified_count + 1
         vim.notify("Modified " .. file, vim.log.levels.INFO)
       end
+
+      -- Collect missing modules
+      if file_missing_modules and #file_missing_modules > 0 then
+        for _, module_name in ipairs(file_missing_modules) do
+          if not vim.tbl_contains(missing_modules, module_name) then
+            table.insert(missing_modules, module_name)
+          end
+        end
+      end
+
       completed = completed + 1
 
       if completed == total then
@@ -592,6 +598,15 @@ local function process_files_parallel(files_to_process, processor_fn, args)
         else
           vim.notify("No files were modified", vim.log.levels.WARN)
         end
+
+        -- Show a single consolidated message for all missing modules
+        if #missing_modules > 0 then
+          local message =
+              "The following modules were not found in the registry and kept their existing version constraints:\n- "
+              .. table.concat(missing_modules, "\n- ")
+          vim.notify(message, vim.log.levels.WARN)
+        end
+
         vim.cmd('edit')
       end
     end)
