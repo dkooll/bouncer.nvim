@@ -6,6 +6,9 @@ local registry_config = {}
 local registry_version_cache = {}
 local version_cache = {}
 
+-- Notification collection
+local pending_notifications = {}
+
 -- Pre-compile patterns for better performance
 local patterns = {
   module_block = '(%s*)module%s*"([^"]*)"',
@@ -13,6 +16,34 @@ local patterns = {
   version_line = '%s*version%s*=%s*"([^"]*)"',
   version_constraint = "~>%s*(%d+)%.(%d+)",
 }
+
+-- Notification handling functions
+local function collect_notification(message, level)
+  table.insert(pending_notifications, {
+    message = message,
+    level = level or vim.log.levels.INFO
+  })
+end
+
+local function show_collected_notifications()
+  if #pending_notifications == 0 then
+    return
+  end
+
+  -- Group notifications by message
+  local unique_messages = {}
+  for _, notif in ipairs(pending_notifications) do
+    unique_messages[notif.message] = notif.level
+  end
+
+  -- Show each unique notification
+  for message, level in pairs(unique_messages) do
+    vim.notify(message, level)
+  end
+
+  -- Clear pending notifications
+  pending_notifications = {}
+end
 
 -- Utility functions
 local function parse_version(version_str)
@@ -87,7 +118,9 @@ local function get_module_config()
   return config
 end
 
-local function get_latest_version_info(registry_source)
+local function get_latest_version_info(registry_source, silent)
+  silent = silent or false -- Default to showing notifications
+
   if registry_version_cache[registry_source] then
     return unpack(registry_version_cache[registry_source])
   end
@@ -97,8 +130,10 @@ local function get_latest_version_info(registry_source)
 
   local ns, name, provider = source_no_subdir:match("^([^/]+)/([^/]+)/([^/]+)$")
   if not (ns and name and provider) then
-    vim.notify("Invalid public registry source format: " .. registry_source, vim.log.levels.ERROR)
-    return nil, nil
+    if not silent then
+      collect_notification("Invalid public registry source format: " .. registry_source, vim.log.levels.ERROR)
+    end
+    return nil, nil, true
   end
 
   local registry_url = string.format(
@@ -116,11 +151,13 @@ local function get_latest_version_info(registry_source)
     local ok, data = pcall(vim.fn.json_decode, result.body)
     if ok and data and data.modules and data.modules[1] and data.modules[1].versions then
       if #data.modules[1].versions == 0 then
-        vim.notify(
-          string.format("Module %s exists but has no versions published", registry_source),
-          vim.log.levels.WARN
-        )
-        return nil, nil
+        if not silent then
+          collect_notification(
+            string.format("Module %s exists but has no versions published", registry_source),
+            vim.log.levels.WARN
+          )
+        end
+        return nil, nil, true
       end
 
       local latest_version = nil
@@ -139,22 +176,25 @@ local function get_latest_version_info(registry_source)
       end
     end
   elseif result and result.status == 404 then
-    vim.notify(
-      string.format("Module %s not found in registry", registry_source),
-      vim.log.levels.ERROR
-    )
-    -- Return a special value to indicate module not found (different from general error)
+    if not silent then
+      collect_notification(
+        string.format("Module %s not found in registry", registry_source),
+        vim.log.levels.ERROR
+      )
+    end
     return nil, nil, true
   else
-    vim.notify(
-      string.format("Failed to fetch latest version for %s: %s",
-        registry_source, (result and tostring(result.status) or "No response")),
-      vim.log.levels.ERROR
-    )
-    return nil, nil
+    if not silent then
+      collect_notification(
+        string.format("Failed to fetch latest version for %s: %s",
+          registry_source, (result and tostring(result.status) or "No response")),
+        vim.log.levels.ERROR
+      )
+    end
+    return nil, nil, true
   end
 
-  return nil, nil
+  return nil, nil, true
 end
 
 -- Find terraform files in the current project
@@ -167,7 +207,7 @@ local function find_terraform_files()
     files = vim.fn.systemlist(find_cmd)
 
     if vim.v.shell_error ~= 0 then
-      vim.notify("Failed to find Terraform files using both fd and find", vim.log.levels.ERROR)
+      collect_notification("Failed to find Terraform files using both fd and find", vim.log.levels.ERROR)
       return {}
     end
   end
@@ -290,8 +330,8 @@ end
 local function process_file(file_path, mod_config, is_local)
   local lines = vim.fn.readfile(file_path)
   if not lines then
-    vim.notify("Failed to read file: " .. file_path, vim.log.levels.ERROR)
-    return false, {}
+    collect_notification("Failed to read file: " .. file_path, vim.log.levels.ERROR)
+    return false
   end
 
   -- Analyze the terraform file
@@ -301,7 +341,6 @@ local function process_file(file_path, mod_config, is_local)
   local modified = false
   local new_lines = {}
   local skip_lines = {} -- Lines to skip
-  local missing_modules = {}
 
   -- Prepare list of lines to modify/skip
   for _, module in ipairs(modules) do
@@ -310,13 +349,17 @@ local function process_file(file_path, mod_config, is_local)
 
     -- Only process modules with matching source or local source
     if module.source_value == expected_source or module.source_value == "../../" then
-      -- Check if module exists when switching to registry
+      -- Check if module exists when switching to registry (silently)
       if is_local == false then
-        local _, _, not_found = get_latest_version_info(expected_source)
+        local _, _, not_found = get_latest_version_info(expected_source, true)
         module_not_found = not_found or false
         if module_not_found then
-          -- Collect missing module names but don't notify yet
-          table.insert(missing_modules, expected_source)
+          -- Add to notifications
+          collect_notification(
+            string.format("Module %s not found in registry - will keep existing version if present",
+              expected_source),
+            vim.log.levels.WARN
+          )
         end
       end
 
@@ -368,7 +411,7 @@ local function process_file(file_path, mod_config, is_local)
               end
             else
               -- Normal case - module exists in registry
-              local latest_version, latest_major = get_latest_version_info(mod_config.registry_source)
+              local latest_version, latest_major = get_latest_version_info(mod_config.registry_source, true)
               if latest_version then
                 local new_version_constraint = latest_major == 0
                     and "~> 0." .. select(2, parse_version(latest_version))
@@ -406,21 +449,21 @@ local function process_file(file_path, mod_config, is_local)
 
   if modified then
     if vim.fn.writefile(new_lines, file_path) == -1 then
-      vim.notify("Failed to write file: " .. file_path, vim.log.levels.ERROR)
-      return false, missing_modules
+      collect_notification("Failed to write file: " .. file_path, vim.log.levels.ERROR)
+      return false
     end
-    return true, missing_modules
+    return true
   end
 
-  return false, missing_modules
+  return false
 end
 
 -- Process a file for all modules
 local function process_file_for_all_modules(file_path)
   local lines = vim.fn.readfile(file_path)
   if not lines then
-    vim.notify("Failed to read file: " .. file_path, vim.log.levels.ERROR)
-    return false, {}
+    collect_notification("Failed to read file: " .. file_path, vim.log.levels.ERROR)
+    return false
   end
 
   -- Analyze the terraform file
@@ -430,7 +473,6 @@ local function process_file_for_all_modules(file_path)
   local modified = false
   local new_lines = {}
   local skip_lines = {}
-  local missing_modules = {}
 
   -- Find registry modules and mark lines for modification
   for _, module in ipairs(modules) do
@@ -440,8 +482,8 @@ local function process_file_for_all_modules(file_path)
       local is_registry_module = module.source_value:match(source_pattern) ~= nil
 
       if is_registry_module then
-        -- Check if this module actually exists in the registry
-        local _, _, module_not_found = get_latest_version_info(module.source_value)
+        -- Check if this module actually exists in the registry (silently)
+        local _, _, module_not_found = get_latest_version_info(module.source_value, true)
 
         -- Always process the module, even if it doesn't exist
         -- Mark all existing version lines for removal
@@ -461,9 +503,13 @@ local function process_file_for_all_modules(file_path)
           not_found = module_not_found
         }
 
-        -- Collect missing module names but don't notify yet
+        -- Collect missing module names without immediate notification
         if module_not_found then
-          table.insert(missing_modules, module.source_value)
+          collect_notification(
+            string.format("Module %s not found in registry - keeping existing version if present",
+              module.source_value),
+            vim.log.levels.WARN
+          )
         end
       end
     end
@@ -487,49 +533,33 @@ local function process_file_for_all_modules(file_path)
       end
 
       -- Add a new version line with the latest version constraint
-      local latest_version, latest_major, module_not_found = get_latest_version_info(skip_lines[i].source_value)
-
-      if latest_version then
-        local new_version_constraint = latest_major == 0
-            and "~> 0." .. select(2, parse_version(latest_version))
-            or "~> " .. latest_major .. ".0"
-        table.insert(new_lines, skip_lines[i].indent .. '  version = "' .. new_version_constraint .. '"')
-
-        -- Always add exactly one blank line after version
-        table.insert(new_lines, "")
-        just_added_blank_line = true
-
-        modified = true
-      else
-        if module_not_found then
-          -- Module doesn't exist but we still need to add a clear notification
-          vim.notify(
-            string.format("Module %s not found in registry - keeping existing version constraint if present",
-              skip_lines[i].source_value),
-            vim.log.levels.WARN
-          )
-
-          -- If there was an existing version, keep it
-          if skip_lines[i].has_version then
-            -- The module must have had version lines to set has_version to true
-            -- So let's go through the modules to find the one we're currently processing
-            for _, mod in ipairs(modules) do
-              if mod.source_line == i and mod.source_value == skip_lines[i].source_value then
-                -- We found the module, now keep the first version constraint if any exist
-                if #mod.version_lines > 0 then
-                  local ver_line = mod.version_lines[1]
-                  table.insert(new_lines, ver_line.indent .. '  version = "' .. ver_line.value .. '"')
-                end
-                break
-              end
+      if skip_lines[i].not_found then
+        -- Module doesn't exist, retain existing version if present
+        for _, mod in ipairs(modules) do
+          if mod.source_line == i and mod.source_value == skip_lines[i].source_value then
+            -- We found the module, now keep the first version constraint if any exist
+            if #mod.version_lines > 0 then
+              local ver_line = mod.version_lines[1]
+              table.insert(new_lines, ver_line.indent .. '  version = "' .. ver_line.value .. '"')
             end
+            break
           end
         end
-
-        -- Add a blank line after source or version
-        table.insert(new_lines, "")
-        just_added_blank_line = true
+      else
+        -- Module exists, get latest version
+        local latest_version, latest_major = get_latest_version_info(skip_lines[i].source_value, true)
+        if latest_version then
+          local new_version_constraint = latest_major == 0
+              and "~> 0." .. select(2, parse_version(latest_version))
+              or "~> " .. latest_major .. ".0"
+          table.insert(new_lines, skip_lines[i].indent .. '  version = "' .. new_version_constraint .. '"')
+        end
       end
+
+      -- Always add exactly one blank line after version or source
+      table.insert(new_lines, "")
+      just_added_blank_line = true
+      modified = true
     elseif skip_lines[i] == true then
       -- This is a line that should be skipped (like an old version line or blank line)
       modified = true
@@ -551,13 +581,13 @@ local function process_file_for_all_modules(file_path)
 
   if modified then
     if vim.fn.writefile(new_lines, file_path) == -1 then
-      vim.notify("Failed to write file: " .. file_path, vim.log.levels.ERROR)
-      return false, missing_modules
+      collect_notification("Failed to write file: " .. file_path, vim.log.levels.ERROR)
+      return false
     end
-    return true, missing_modules
+    return true
   end
 
-  return false, missing_modules
+  return false
 end
 
 -- Process multiple files in parallel
@@ -565,47 +595,32 @@ local function process_files_parallel(files_to_process, processor_fn, args)
   local modified_count = 0
   local completed = 0
   local total = #files_to_process
-  local missing_modules = {}
 
   for _, file in ipairs(files_to_process) do
     vim.schedule(function()
-      local success, file_missing_modules
+      local success
       if args then
-        success, file_missing_modules = processor_fn(file, args.module_config, args.is_local)
+        success = processor_fn(file, args.module_config, args.is_local)
       else
-        success, file_missing_modules = processor_fn(file)
+        success = processor_fn(file)
       end
 
       if success then
         modified_count = modified_count + 1
-        vim.notify("Modified " .. file, vim.log.levels.INFO)
-      end
-
-      -- Collect missing modules
-      if file_missing_modules and #file_missing_modules > 0 then
-        for _, module_name in ipairs(file_missing_modules) do
-          if not vim.tbl_contains(missing_modules, module_name) then
-            table.insert(missing_modules, module_name)
-          end
-        end
+        collect_notification("Modified " .. file, vim.log.levels.INFO)
       end
 
       completed = completed + 1
 
       if completed == total then
         if modified_count > 0 then
-          vim.notify(string.format("Modified %d files", modified_count), vim.log.levels.INFO)
+          collect_notification(string.format("Modified %d files", modified_count), vim.log.levels.INFO)
         else
-          vim.notify("No files were modified", vim.log.levels.WARN)
+          collect_notification("No files were modified", vim.log.levels.WARN)
         end
 
-        -- Show a single consolidated message for all missing modules
-        if #missing_modules > 0 then
-          local message =
-              "The following modules were not found in the registry and kept their existing version constraints:\n- "
-              .. table.concat(missing_modules, "\n- ")
-          vim.notify(message, vim.log.levels.WARN)
-        end
+        -- Show all collected notifications at once
+        show_collected_notifications()
 
         vim.cmd('edit')
       end
@@ -618,13 +633,15 @@ local function create_commands()
   vim.api.nvim_create_user_command("BounceModuleToLocal", function()
     local ok, module_config = pcall(get_module_config)
     if not ok then
-      vim.notify("Failed to get module config: " .. module_config, vim.log.levels.ERROR)
+      collect_notification("Failed to get module config: " .. module_config, vim.log.levels.ERROR)
+      show_collected_notifications()
       return
     end
 
     local files = find_terraform_files()
     if #files == 0 then
-      vim.notify("No Terraform files found", vim.log.levels.WARN)
+      collect_notification("No Terraform files found", vim.log.levels.WARN)
+      show_collected_notifications()
       return
     end
     process_files_parallel(files, process_file, { module_config = module_config, is_local = true })
@@ -633,13 +650,15 @@ local function create_commands()
   vim.api.nvim_create_user_command("BounceModuleToRegistry", function()
     local ok, module_config = pcall(get_module_config)
     if not ok then
-      vim.notify("Failed to get module config: " .. module_config, vim.log.levels.ERROR)
+      collect_notification("Failed to get module config: " .. module_config, vim.log.levels.ERROR)
+      show_collected_notifications()
       return
     end
 
     local files = find_terraform_files()
     if #files == 0 then
-      vim.notify("No Terraform files found", vim.log.levels.WARN)
+      collect_notification("No Terraform files found", vim.log.levels.WARN)
+      show_collected_notifications()
       return
     end
     process_files_parallel(files, process_file, { module_config = module_config, is_local = false })
@@ -648,7 +667,8 @@ local function create_commands()
   vim.api.nvim_create_user_command("BounceModulesToRegistry", function()
     local files = find_terraform_files()
     if #files == 0 then
-      vim.notify("No Terraform files found", vim.log.levels.WARN)
+      collect_notification("No Terraform files found", vim.log.levels.WARN)
+      show_collected_notifications()
       return
     end
     process_files_parallel(files, process_file_for_all_modules)
