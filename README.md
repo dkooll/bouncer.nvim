@@ -72,3 +72,13 @@ Registry modules should follow the format: {namespace}/{module}/{provider}
 When switching to local development, it uses the relative path "../../"
 
 Version constraints follow the Terraform convention ~> X.0 for major versions
+
+## Requirements
+
+Neovim 0.7.0 or higher
+
+plenary.nvim
+
+Git (for repository name detection)
+
+Either fd or the find command (for locating Terraform files)
