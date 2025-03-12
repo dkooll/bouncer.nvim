@@ -6,10 +6,13 @@ This plugin simplifies the workflow when developing Terraform modules by allowin
 
 ## Features
 
-- switch terraform module references between local and registry paths across your project
-- auto-detect the appropriate registry path based on your repository name
-- automatically fetch and apply the latest module version constraints
-- consistent formatting of module source and version attributes
+Switch terraform module references between local and registry paths across your project
+
+Auto-detect the appropriate registry path based on your repository name
+
+Automatically fetch and apply the latest module version constraints
+
+Consistent formatting of module source and version attributes
 
 ## Usage
 
