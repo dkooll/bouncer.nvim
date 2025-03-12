@@ -38,21 +38,21 @@ return {
 
 The setup function accepts the following options:
 
-- namespace (required)
+`namespace (required)`
 
 The registry namespace for your Terraform modules
 
 ## Commands
 
-- :BounceModuleToLocal
+`:BounceModuleToLocal`
 
 Changes the current module's source to local (../../)
 
-- :BounceModuleToRegistry
+`:BounceModuleToRegistry`
 
 Changes the current module's source to registry and updates its version
 
-- :BounceModulesToRegistry
+`:BounceModulesToRegistry`
 
 Updates all modules with registry sources to use the latest available versions
 
@@ -60,12 +60,12 @@ Updates all modules with registry sources to use the latest available versions
 
 This plugin works by analyzing your project structure and follows these assumptions:
 
-- Your repository follows the naming convention: terraform-{provider}-{module}
+Your repository follows the naming convention: terraform-{provider}-{module}
 
-- It will search for all main.tf files in your project sub directories in the examples folder
+It will search for all main.tf files in your project sub directories in the examples folder
 
-- Registry modules should follow the format: {namespace}/{module}/{provider}
+Registry modules should follow the format: {namespace}/{module}/{provider}
 
-- When switching to local development, it uses the relative path "../../"
+When switching to local development, it uses the relative path "../../"
 
--Version constraints follow the Terraform convention ~> X.0 for major versions
+Version constraints follow the Terraform convention ~> X.0 for major versions
