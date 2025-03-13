@@ -79,6 +79,4 @@ Neovim 0.7.0 or higher
 
 plenary.nvim
 
-Git (for repository name detection)
-
 Either fd or the find command (for locating Terraform files)
