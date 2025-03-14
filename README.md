@@ -75,8 +75,8 @@ Version constraints follow the Terraform convention ~> X.0 for major versions
 
 ## Requirements
 
-Neovim 0.7.0 or higher
+[Neovim](https://neovim.io/) 0.7.0 or higher
 
-plenary.nvim
+[plenary.nvim](https://github.com/nvim-lua/plenary.nvim)
 
-Either fd or the find command (for locating Terraform files)
+Either [fd](https://github.com/sharkdp/fd) or the find command (for locating Terraform files)
