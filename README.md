@@ -73,6 +73,14 @@ When switching to local development, it uses the relative path "../../"
 
 Version constraints follow the Terraform convention ~> X.0 for major versions
 
+## Contributors
+
+We welcome contributions from the community! Whether it's reporting a bug, suggesting a new feature, or submitting a pull request, your input is highly valued. <br><br>
+
+<a href="https://github.com/dkooll/bouncer.nvim/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=dkooll/bouncer.nvim" />
+</a>
+
 ## Requirements
 
 [Neovim](https://neovim.io/) 0.7.0 or higher
