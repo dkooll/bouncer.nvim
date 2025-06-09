@@ -109,10 +109,29 @@ local function get_latest_version_info(registry_source)
     timeout = 5000
   })
 
-  if not (result and result.status == 200 and result.body) then
+  if not result then
     vim.notify(
-      string.format("Failed to fetch latest version for %s: %s",
-        registry_source, (result and tostring(result.status) or "No response")),
+      string.format("Failed to connect to Terraform registry for module: %s", registry_source),
+      vim.log.levels.ERROR
+    )
+    return nil, nil
+  end
+
+  -- Handle module not found specifically
+  if result.status == 404 then
+    vim.notify(
+      string.format(
+      "Module not found in registry: %s\nPlease verify the module name, namespace, and provider are correct.",
+        registry_source),
+      vim.log.levels.ERROR
+    )
+    return nil, nil
+  end
+
+  if not (result.status == 200 and result.body) then
+    vim.notify(
+      string.format("Failed to fetch latest version for %s: HTTP %s",
+        registry_source, tostring(result.status)),
       vim.log.levels.ERROR
     )
     return nil, nil
@@ -237,6 +256,7 @@ local function parse_modules(lines)
   return modules
 end
 
+-- Fix indentation for nested blocks
 local function fix_content_indentation(content_lines, base_indent)
   local fixed_lines = {}
   local current_depth = 0
@@ -819,43 +839,47 @@ return M
 --   return modules
 -- end
 --
--- -- Fix indentation for nested blocks
 -- local function fix_content_indentation(content_lines, base_indent)
 --   local fixed_lines = {}
 --   local current_depth = 0
 --
 --   for _, line in ipairs(content_lines) do
---     if line:match(patterns.empty_line) or line:match(patterns.comment_line) then
---       table.insert(fixed_lines, line)
+--     if line:match(patterns.empty_line) then
+--       table.insert(fixed_lines, "")
+--     elseif line:match(patterns.comment_line) then
+--       -- Preserve comment lines with current depth
+--       local content = line:gsub("^%s*", "")
+--       table.insert(fixed_lines, base_indent .. string.rep("  ", current_depth) .. content)
 --     else
---       -- Count opening and closing braces
---       local open_braces = 0
---       local close_braces = 0
+--       local content = line:gsub("^%s*", "")
 --
---       for char in line:gmatch("[{}]") do
---         if char == "{" then
---           open_braces = open_braces + 1
---         else
---           close_braces = close_braces + 1
+--       -- Check if line starts with closing bracket/brace
+--       local starts_with_close = content:match("^[}%]]")
+--
+--       -- Adjust depth before applying indentation for closing brackets/braces
+--       if starts_with_close then
+--         current_depth = math.max(0, current_depth - 1)
+--       end
+--
+--       -- Apply indentation
+--       table.insert(fixed_lines, base_indent .. string.rep("  ", current_depth) .. content)
+--
+--       -- Count all opening and closing brackets/braces on this line
+--       local net_depth_change = 0
+--       for char in content:gmatch("[{}%[%]]") do
+--         if char == "{" or char == "[" then
+--           net_depth_change = net_depth_change + 1
+--         elseif char == "}" or char == "]" then
+--           net_depth_change = net_depth_change - 1
 --         end
 --       end
 --
---       -- Adjust depth for closing braces at start of line
---       if line:match("^%s*}") then
---         current_depth = current_depth - close_braces
---       end
---
---       -- Apply proper indentation
---       local content = line:gsub("^%s*", "")
---       local proper_indent = base_indent .. string.rep("  ", current_depth)
---       table.insert(fixed_lines, proper_indent .. content)
---
---       -- Adjust depth for opening braces
---       current_depth = current_depth + open_braces
---
---       -- Adjust for closing braces not at start of line
---       if not line:match("^%s*}") then
---         current_depth = current_depth - close_braces
+--       -- Update depth for next line (but don't double-count closing brackets we already handled)
+--       if starts_with_close then
+--         -- We already decremented for the first closing bracket, so add 1 back before applying net change
+--         current_depth = math.max(0, current_depth + net_depth_change + 1)
+--       else
+--         current_depth = math.max(0, current_depth + net_depth_change)
 --       end
 --     end
 --   end
