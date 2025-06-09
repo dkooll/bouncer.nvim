@@ -5,6 +5,7 @@ local config_cache = {}
 local registry_config = {}
 local registry_version_cache = {}
 local version_cache = {}
+local missing_modules = {}
 
 -- Pre-compile patterns for better performance
 local patterns = {
@@ -86,7 +87,6 @@ local function get_latest_version_info(registry_source)
 
   local ok, plenary_http = pcall(require, "plenary.curl")
   if not ok then
-    vim.notify("plenary.curl is required but not available", vim.log.levels.ERROR)
     return nil, nil
   end
 
@@ -94,7 +94,6 @@ local function get_latest_version_info(registry_source)
   local ns, name, provider = source_no_subdir:match("^([^/]+)/([^/]+)/([^/]+)$")
 
   if not (ns and name and provider) then
-    vim.notify("Invalid registry source format: " .. registry_source, vim.log.levels.ERROR)
     return nil, nil
   end
 
@@ -110,29 +109,21 @@ local function get_latest_version_info(registry_source)
   })
 
   if not result then
-    print("ERROR: Failed to connect to Terraform registry for module: " .. registry_source)
     return nil, nil
   end
 
   -- Handle module not found specifically
   if result.status == 404 then
-    print("ERROR: Module not found in registry: " .. registry_source)
-    print("Please verify the module name, namespace, and provider are correct.")
+    table.insert(missing_modules, registry_source)
     return nil, nil
   end
 
   if not (result.status == 200 and result.body) then
-    vim.notify(
-      string.format("Failed to fetch latest version for %s: HTTP %s",
-        registry_source, tostring(result.status)),
-      vim.log.levels.ERROR
-    )
     return nil, nil
   end
 
   local ok_decode, data = pcall(vim.fn.json_decode, result.body)
   if not (ok_decode and data and data.modules and data.modules[1] and data.modules[1].versions) then
-    vim.notify("Invalid response format from registry", vim.log.levels.ERROR)
     return nil, nil
   end
 
@@ -144,13 +135,11 @@ local function get_latest_version_info(registry_source)
   end
 
   if not latest_version then
-    vim.notify("No versions found for " .. registry_source, vim.log.levels.ERROR)
     return nil, nil
   end
 
   local major_version = tonumber(latest_version:match("^(%d+)"))
   if not major_version then
-    vim.notify("Invalid version format: " .. latest_version, vim.log.levels.ERROR)
     return nil, nil
   end
 
@@ -508,7 +497,47 @@ local function process_file_for_all_modules(file_path)
   return modified
 end
 
--- Process multiple files with better error handling
+-- Show missing modules in a buffer
+local function show_missing_modules()
+  if #missing_modules == 0 then
+    return
+  end
+
+  -- Create a new buffer
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_open_win(buf, true, {
+    relative = 'editor',
+    width = math.min(80, vim.o.columns - 4),
+    height = math.min(#missing_modules + 4, vim.o.lines - 4),
+    row = math.floor((vim.o.lines - (#missing_modules + 4)) / 2),
+    col = math.floor((vim.o.columns - 80) / 2),
+    style = 'minimal',
+    border = 'rounded',
+    title = ' Missing Modules ',
+    title_pos = 'center'
+  })
+
+  -- Set buffer content
+  local lines = {
+    "The following modules were not found in the registry:",
+    ""
+  }
+  for _, module in ipairs(missing_modules) do
+    table.insert(lines, "  ✗ " .. module)
+  end
+  table.insert(lines, "")
+  table.insert(lines, "Press 'q' to close")
+
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].modifiable = false
+  vim.bo[buf].buftype = 'nofile'
+
+  -- Close on 'q'
+  vim.api.nvim_buf_set_keymap(buf, 'n', 'q', '<cmd>close<cr>', { noremap = true, silent = true })
+
+  -- Clear the list for next time
+  missing_modules = {}
+end
 local function process_files(files_to_process, processor_fn, args)
   local modified_count = 0
   local errors = {}
@@ -541,11 +570,14 @@ local function process_files(files_to_process, processor_fn, args)
   if modified_count > 0 then
     vim.cmd('checktime') -- Reload buffers if they've changed
   end
+
+  show_missing_modules() -- Show any missing modules
 end
 
 -- Create user commands
 local function create_commands()
   vim.api.nvim_create_user_command("BounceModuleToLocal", function()
+    missing_modules = {} -- Clear previous results
     local ok, module_config = pcall(get_module_config)
     if not ok then
       vim.notify("Failed to get module config: " .. module_config, vim.log.levels.ERROR)
@@ -561,6 +593,7 @@ local function create_commands()
   end, { desc = "Switch module source to local (../../)" })
 
   vim.api.nvim_create_user_command("BounceModuleToRegistry", function()
+    missing_modules = {} -- Clear previous results
     local ok, module_config = pcall(get_module_config)
     if not ok then
       vim.notify("Failed to get module config: " .. module_config, vim.log.levels.ERROR)
@@ -576,6 +609,7 @@ local function create_commands()
   end, { desc = "Switch module source to registry with latest version" })
 
   vim.api.nvim_create_user_command("BounceModulesToRegistry", function()
+    missing_modules = {} -- Clear previous results
     local files = find_terraform_files()
     if #files == 0 then
       return
