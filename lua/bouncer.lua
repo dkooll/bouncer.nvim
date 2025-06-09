@@ -237,43 +237,47 @@ local function parse_modules(lines)
   return modules
 end
 
--- Fix indentation for nested blocks
 local function fix_content_indentation(content_lines, base_indent)
   local fixed_lines = {}
   local current_depth = 0
 
   for _, line in ipairs(content_lines) do
-    if line:match(patterns.empty_line) or line:match(patterns.comment_line) then
-      table.insert(fixed_lines, line)
+    if line:match(patterns.empty_line) then
+      table.insert(fixed_lines, "")
+    elseif line:match(patterns.comment_line) then
+      -- Preserve comment lines with current depth
+      local content = line:gsub("^%s*", "")
+      table.insert(fixed_lines, base_indent .. string.rep("  ", current_depth) .. content)
     else
-      -- Count opening and closing braces
-      local open_braces = 0
-      local close_braces = 0
+      local content = line:gsub("^%s*", "")
 
-      for char in line:gmatch("[{}]") do
-        if char == "{" then
-          open_braces = open_braces + 1
-        else
-          close_braces = close_braces + 1
+      -- Check if line starts with closing bracket/brace
+      local starts_with_close = content:match("^[}%]]")
+
+      -- Adjust depth before applying indentation for closing brackets/braces
+      if starts_with_close then
+        current_depth = math.max(0, current_depth - 1)
+      end
+
+      -- Apply indentation
+      table.insert(fixed_lines, base_indent .. string.rep("  ", current_depth) .. content)
+
+      -- Count all opening and closing brackets/braces on this line
+      local net_depth_change = 0
+      for char in content:gmatch("[{}%[%]]") do
+        if char == "{" or char == "[" then
+          net_depth_change = net_depth_change + 1
+        elseif char == "}" or char == "]" then
+          net_depth_change = net_depth_change - 1
         end
       end
 
-      -- Adjust depth for closing braces at start of line
-      if line:match("^%s*}") then
-        current_depth = current_depth - close_braces
-      end
-
-      -- Apply proper indentation
-      local content = line:gsub("^%s*", "")
-      local proper_indent = base_indent .. string.rep("  ", current_depth)
-      table.insert(fixed_lines, proper_indent .. content)
-
-      -- Adjust depth for opening braces
-      current_depth = current_depth + open_braces
-
-      -- Adjust for closing braces not at start of line
-      if not line:match("^%s*}") then
-        current_depth = current_depth - close_braces
+      -- Update depth for next line (but don't double-count closing brackets we already handled)
+      if starts_with_close then
+        -- We already decremented for the first closing bracket, so add 1 back before applying net change
+        current_depth = math.max(0, current_depth + net_depth_change + 1)
+      else
+        current_depth = math.max(0, current_depth + net_depth_change)
       end
     end
   end
@@ -589,7 +593,9 @@ return M
 --   module_start = '^(%s*)module%s+"([^"]*)"[^{]*{%s*$',
 --   source_line = '^%s*source%s*=%s*"([^"]*)"',
 --   version_line = '^%s*version%s*=%s*"([^"]*)"',
---   comment_line = "^%s*#",
+--   commented_source = '^%s*[/#]+%s*source%s*=%s*"([^"]*)"',
+--   commented_version = '^%s*[/#]+%s*version%s*=%s*"([^"]*)"',
+--   comment_line = "^%s*[/#]",
 --   empty_line = "^%s*$",
 --   closing_brace = '^%s*}%s*$',
 -- }
@@ -624,7 +630,9 @@ return M
 -- -- Configuration and registry functions
 -- local function get_module_config()
 --   local cwd = vim.fn.getcwd()
---   if config_cache[cwd] then return config_cache[cwd] end
+--   if config_cache[cwd] then
+--     return config_cache[cwd]
+--   end
 --
 --   local output = vim.fn.system("basename `git rev-parse --show-toplevel`")
 --   if vim.v.shell_error ~= 0 then
@@ -777,12 +785,23 @@ return M
 --           break
 --         end
 --
---         -- Check for source line
+--         -- Check for active source line
 --         local source = current_line:match(patterns.source_line)
 --         if source then
 --           module.source_value = source
---         elseif not current_line:match(patterns.version_line) then
---           -- Store all content except version lines (we'll regenerate those)
+--         else
+--           -- Check for commented source line
+--           local commented_source = current_line:match(patterns.commented_source)
+--           if commented_source then
+--             module.source_value = commented_source
+--           end
+--         end
+--
+--         -- Skip both active and commented source/version lines from content
+--         if not (current_line:match(patterns.source_line) or
+--               current_line:match(patterns.version_line) or
+--               current_line:match(patterns.commented_source) or
+--               current_line:match(patterns.commented_version)) then
 --           table.insert(module.content_lines, current_line)
 --         end
 --
@@ -913,7 +932,17 @@ return M
 --
 --   for _, module in ipairs(modules) do
 --     local expected_source = mod_config.registry_source
---     local should_process = (module.source_value == expected_source or module.source_value == "../../")
+--     local should_process = false
+--
+--     if is_local then
+--       -- For local bounce: process if source matches expected or is already local
+--       should_process = (module.source_value == expected_source or module.source_value == "../../")
+--     else
+--       -- For registry bounce: process if source matches expected, is local, or is missing/commented
+--       should_process = (module.source_value == expected_source or
+--         module.source_value == "../../" or
+--         not module.source_value)
+--     end
 --
 --     -- Copy lines before this module
 --     while current_line < module.start_line do
