@@ -290,10 +290,15 @@ local function generate_module_block(module, new_source, version_constraint)
     end
   end
 
+  -- Remove leading empty lines from other content
+  while #other_content > 0 and other_content[1]:match(patterns.empty_line) do
+    table.remove(other_content, 1)
+  end
+
   -- Add other content with proper indentation
   local fixed_content = fix_content_indentation(other_content, base_indent)
   if #fixed_content > 0 then
-    table.insert(lines, "") -- Empty line before other content
+    table.insert(lines, "") -- Single empty line before other content
     for _, line in ipairs(fixed_content) do
       table.insert(lines, line)
     end
