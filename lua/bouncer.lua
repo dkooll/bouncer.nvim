@@ -274,42 +274,27 @@ local function generate_module_block(module, new_source, version_constraint)
   -- Module declaration
   table.insert(lines, module.indent .. 'module "' .. module.name .. '" {')
 
-  -- Process content lines to separate before/after source and fix indentation
-  local lines_before_source = {}
-  local lines_after_source = {}
-  local found_source = false
-
-  for _, line in ipairs(module.content_lines) do
-    if line:match(patterns.source_line) then
-      found_source = true
-    elseif not (line:match(patterns.empty_line) or line:match(patterns.comment_line)) then
-      if not found_source then
-        table.insert(lines_before_source, line)
-      else
-        table.insert(lines_after_source, line)
-      end
-    end
-  end
-
-  -- Add lines before source with proper indentation
-  local fixed_before = fix_content_indentation(lines_before_source, base_indent)
-  for _, line in ipairs(fixed_before) do
-    table.insert(lines, line)
-  end
-
-  -- Source line with consistent formatting
+  -- Source line with consistent formatting (always first)
   table.insert(lines, base_indent .. 'source  = "' .. new_source .. '"')
 
-  -- Version line (only for registry sources)
+  -- Version line (only for registry sources, always after source)
   if version_constraint then
     table.insert(lines, base_indent .. 'version = "' .. version_constraint .. '"')
   end
 
-  -- Add lines after source with proper indentation
-  local fixed_after = fix_content_indentation(lines_after_source, base_indent)
-  if #fixed_after > 0 then
+  -- Filter out source and version lines from content, keep everything else
+  local other_content = {}
+  for _, line in ipairs(module.content_lines) do
+    if not (line:match(patterns.source_line) or line:match(patterns.version_line)) then
+      table.insert(other_content, line)
+    end
+  end
+
+  -- Add other content with proper indentation
+  local fixed_content = fix_content_indentation(other_content, base_indent)
+  if #fixed_content > 0 then
     table.insert(lines, "") -- Empty line before other content
-    for _, line in ipairs(fixed_after) do
+    for _, line in ipairs(fixed_content) do
       table.insert(lines, line)
     end
   end
