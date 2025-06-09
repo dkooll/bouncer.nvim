@@ -5,7 +5,7 @@ local config_cache = {}
 local registry_config = {}
 local registry_version_cache = {}
 local version_cache = {}
-local missing_modules = {}
+local missing_modules = {} -- Track modules that don't exist
 
 -- Pre-compile patterns for better performance
 local patterns = {
@@ -465,7 +465,7 @@ local function process_file_for_all_modules(file_path)
 
         modified = true
       else
-        -- Copy original if we can't get version info (e.g., 404 error)
+        -- Module not found or error - copy original unchanged
         while current_line <= module.end_line do
           table.insert(new_lines, lines[current_line])
           current_line = current_line + 1
@@ -508,8 +508,8 @@ local function show_missing_modules()
   vim.api.nvim_open_win(buf, true, {
     relative = 'editor',
     width = math.min(80, vim.o.columns - 4),
-    height = math.min(#missing_modules + 4, vim.o.lines - 4),
-    row = math.floor((vim.o.lines - (#missing_modules + 4)) / 2),
+    height = math.min(#missing_modules + 6, vim.o.lines - 4),
+    row = math.floor((vim.o.lines - (#missing_modules + 6)) / 2),
     col = math.floor((vim.o.columns - 80) / 2),
     style = 'minimal',
     border = 'rounded',
@@ -533,7 +533,7 @@ local function show_missing_modules()
   vim.bo[buf].buftype = 'nofile'
 
   -- Close on 'q'
-  vim.api.nvim_buf_set_keymap(buf, 'n', 'q', '<cmd>close<cr>', { noremap = true, silent = true })
+  vim.keymap.set('n', 'q', '<cmd>close<cr>', { buffer = buf, noremap = true, silent = true })
 
   -- Clear the list for next time
   missing_modules = {}
@@ -616,6 +616,12 @@ local function create_commands()
     end
 
     process_files(files, process_file_for_all_modules)
+
+    -- Force show window if no missing modules (for testing)
+    if #missing_modules == 0 then
+      missing_modules = { "test/missing/module" }
+      show_missing_modules()
+    end
   end, { desc = "Update all registry modules to latest versions" })
 end
 
