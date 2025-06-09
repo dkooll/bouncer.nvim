@@ -497,43 +497,30 @@ local function process_file_for_all_modules(file_path)
   return modified
 end
 
--- Show missing modules in a buffer
+-- Show missing modules in a simple bottom window
 local function show_missing_modules()
   if #missing_modules == 0 then
     return
   end
 
-  -- Create a new buffer
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_open_win(buf, true, {
-    relative = 'editor',
-    width = math.min(80, vim.o.columns - 4),
-    height = math.min(#missing_modules + 6, vim.o.lines - 4),
-    row = math.floor((vim.o.lines - (#missing_modules + 6)) / 2),
-    col = math.floor((vim.o.columns - 80) / 2),
-    style = 'minimal',
-    border = 'rounded',
-    title = ' Missing Modules ',
-    title_pos = 'center'
-  })
+  -- Create split at bottom
+  vim.cmd('botright 10split')
 
-  -- Set buffer content
-  local lines = {
-    "The following modules were not found in the registry:",
-    ""
-  }
+  -- Get the buffer and set content
+  local buf = vim.api.nvim_get_current_buf()
+
+  local lines = { "Missing modules from registry:" }
   for _, module in ipairs(missing_modules) do
-    table.insert(lines, "  ✗ " .. module)
+    table.insert(lines, "  " .. module)
   end
-  table.insert(lines, "")
-  table.insert(lines, "Press 'q' to close")
 
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
   vim.bo[buf].buftype = 'nofile'
+  vim.bo[buf].bufhidden = 'wipe'
 
-  -- Close on 'q'
-  vim.keymap.set('n', 'q', '<cmd>close<cr>', { buffer = buf, noremap = true, silent = true })
+  -- Set buffer name
+  vim.api.nvim_buf_set_name(buf, "Missing Modules")
 
   -- Clear the list for next time
   missing_modules = {}
@@ -616,12 +603,6 @@ local function create_commands()
     end
 
     process_files(files, process_file_for_all_modules)
-
-    -- Force show window if no missing modules (for testing)
-    if #missing_modules == 0 then
-      missing_modules = { "test/missing/module" }
-      show_missing_modules()
-    end
   end, { desc = "Update all registry modules to latest versions" })
 end
 
