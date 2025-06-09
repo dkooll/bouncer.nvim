@@ -110,21 +110,14 @@ local function get_latest_version_info(registry_source)
   })
 
   if not result then
-    vim.notify(
-      string.format("Failed to connect to Terraform registry for module: %s", registry_source),
-      vim.log.levels.ERROR
-    )
+    print("ERROR: Failed to connect to Terraform registry for module: " .. registry_source)
     return nil, nil
   end
 
   -- Handle module not found specifically
   if result.status == 404 then
-    vim.notify(
-      string.format(
-      "Module not found in registry: %s\nPlease verify the module name, namespace, and provider are correct.",
-        registry_source),
-      vim.log.levels.ERROR
-    )
+    print("ERROR: Module not found in registry: " .. registry_source)
+    print("Please verify the module name, namespace, and provider are correct.")
     return nil, nil
   end
 
