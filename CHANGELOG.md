@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/dkooll/bouncer.nvim/compare/v1.2.0...v1.3.0) (2025-10-21)
+
+
+### Features
+
+* cache registry lookups by module base ([#10](https://github.com/dkooll/bouncer.nvim/issues/10)) ([5dae351](https://github.com/dkooll/bouncer.nvim/commit/5dae3513d2f5c2691fdc804b5f2a0ad0bc77c53b))
+
 ## [1.2.0](https://github.com/dkooll/bouncer.nvim/compare/v1.1.1...v1.2.0) (2025-10-21)
 
 
