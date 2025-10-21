@@ -14,6 +14,14 @@ Automatically fetch and apply the latest module version constraints
 
 Consistent formatting of module source and version attributes
 
+## Requirements
+
+Neovim 0.7.0 or higher
+
+plenary.nvim plugin
+
+Either [fd](https://github.com/sharkdp/fd) or the find command (for locating Terraform files)
+
 ## Usage
 
 To configure the plugin with [lazy.nvim](https://github.com/folke/lazy.nvim), use the following setup:
@@ -80,11 +88,3 @@ We welcome contributions from the community! Whether it's reporting a bug, sugge
 <a href="https://github.com/dkooll/bouncer.nvim/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=dkooll/bouncer.nvim" />
 </a>
-
-## Requirements
-
-[Neovim](https://neovim.io/) 0.7.0 or higher
-
-[plenary.nvim](https://github.com/nvim-lua/plenary.nvim)
-
-Either [fd](https://github.com/sharkdp/fd) or the find command (for locating Terraform files)
