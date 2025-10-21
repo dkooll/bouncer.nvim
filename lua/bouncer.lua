@@ -32,6 +32,128 @@ local patterns = {
   empty_line = "^%s*$",
 }
 
+local function normalize_registry_base(base)
+  if not base then
+    return nil
+  end
+  return base:gsub("/+$", "")
+end
+
+local function registry_base_matches(base, expected_base)
+  base = normalize_registry_base(base)
+  expected_base = normalize_registry_base(expected_base)
+
+  if not base or not expected_base then
+    return false
+  end
+
+  if base == expected_base then
+    return true
+  end
+
+  local default_pattern = "^" .. vim.pesc(DEFAULT_REGISTRY_HOST) .. "/"
+  local base_without_default = base:gsub(default_pattern, "")
+  local expected_without_default = expected_base:gsub(default_pattern, "")
+
+  if base_without_default == expected_base then
+    return true
+  end
+
+  if base == expected_without_default then
+    return true
+  end
+
+  if base_without_default == expected_without_default then
+    return true
+  end
+
+  return false
+end
+
+local function split_registry_source(source)
+  if not source then
+    return nil, nil
+  end
+
+  local base, subdir = source:match("^(.-)//(.+)$")
+  if not base then
+    base = source
+  end
+
+  base = normalize_registry_base(base)
+
+  if subdir then
+    subdir = subdir:gsub("^/+", "")
+    subdir = subdir:gsub("/+$", "")
+  end
+
+  return base, subdir
+end
+
+local function split_local_source(source)
+  if not source then
+    return nil
+  end
+
+  local remainder = source:match("^%.%./%.%./?(.*)$")
+  if remainder == nil then
+    return nil
+  end
+
+  remainder = remainder:gsub("/+$", "")
+  if remainder == "" then
+    return nil
+  end
+
+  return remainder
+end
+
+local function get_source_metadata(source)
+  if not source then
+    return nil
+  end
+
+  local local_subdir = split_local_source(source)
+  if local_subdir or source:match("^%.%./%.%./?$") then
+    return {
+      type = "local",
+      subdir = local_subdir
+    }
+  end
+
+  local base, subdir = split_registry_source(source)
+  if base then
+    return {
+      type = "registry",
+      base = base,
+      subdir = subdir
+    }
+  end
+
+  return nil
+end
+
+local function build_local_source(subdir)
+  if subdir and subdir ~= "" then
+    subdir = subdir:gsub("^/+", "")
+    subdir = subdir:gsub("/+$", "")
+    return string.format("../../%s/", subdir)
+  end
+
+  return "../../"
+end
+
+local function build_registry_source(base, subdir)
+  base = normalize_registry_base(base)
+  if subdir and subdir ~= "" then
+    subdir = subdir:gsub("^/+", "")
+    subdir = subdir:gsub("/+$", "")
+    return string.format("%s//%s", base, subdir)
+  end
+
+  return base
+end
+
 local function parse_version(version_str)
   if version_cache[version_str] then
     return unpack(version_cache[version_str])
@@ -363,15 +485,17 @@ local function process_file(file_path, mod_config, is_local)
   local current_line = 1
 
   for _, module in ipairs(modules) do
-    local expected_source = mod_config.registry_source
-    local should_process = false
+    local metadata = module.source_value and get_source_metadata(module.source_value) or nil
+    local matches_registry = metadata
+        and metadata.type == "registry"
+        and registry_base_matches(metadata.base, mod_config.registry_source)
+    local matches_local = metadata and metadata.type == "local"
+    local should_process
 
     if is_local then
-      should_process = (module.source_value == expected_source or module.source_value == "../../")
+      should_process = matches_registry or matches_local
     else
-      should_process = (module.source_value == expected_source or
-        module.source_value == "../../" or
-        not module.source_value)
+      should_process = matches_registry or matches_local or not module.source_value
     end
 
     while current_line < module.start_line do
@@ -381,12 +505,13 @@ local function process_file(file_path, mod_config, is_local)
 
     if should_process then
       local new_source, version_constraint
+      local subdir = metadata and metadata.subdir or nil
 
       if is_local then
-        new_source = "../../"
+        new_source = build_local_source(subdir)
         version_constraint = nil
       else
-        new_source = mod_config.registry_source
+        new_source = build_registry_source(mod_config.registry_source, subdir)
         local latest_version, latest_major = get_latest_version_info(mod_config.registry_source)
         if latest_version then
           version_constraint = generate_version_constraint(latest_version, latest_major)
