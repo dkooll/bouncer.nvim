@@ -225,8 +225,13 @@ local function get_module_config()
 end
 
 local function get_latest_version_info(registry_source)
-  if registry_version_cache[registry_source] then
-    return unpack(registry_version_cache[registry_source])
+  local base = split_registry_source(registry_source)
+  if not base then
+    return nil, nil
+  end
+
+  if registry_version_cache[base] then
+    return unpack(registry_version_cache[base])
   end
 
   local ok, plenary_http = pcall(require, "plenary.curl")
@@ -235,8 +240,7 @@ local function get_latest_version_info(registry_source)
     return nil, nil
   end
 
-  local source_no_subdir = registry_source:match("^(.-)//") or registry_source
-  local segments = vim.split(source_no_subdir, "/", { trimempty = true })
+  local segments = vim.split(base, "/", { trimempty = true })
   local host, ns, name, provider
 
   if #segments == 4 then
@@ -300,7 +304,7 @@ local function get_latest_version_info(registry_source)
     return nil, nil
   end
 
-  registry_version_cache[registry_source] = { latest_version, major_version }
+  registry_version_cache[base] = { latest_version, major_version }
   return latest_version, major_version
 end
 
