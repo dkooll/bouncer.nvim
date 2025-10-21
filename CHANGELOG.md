@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/dkooll/bouncer.nvim/compare/v1.1.1...v1.2.0) (2025-10-21)
+
+
+### Features
+
+* handle submodule paths when bouncing modules between local and registry ([#8](https://github.com/dkooll/bouncer.nvim/issues/8)) ([a2684b4](https://github.com/dkooll/bouncer.nvim/commit/a2684b47c43391ea00ae2385456f2e45d1e34654))
+
 ## [1.1.1](https://github.com/dkooll/bouncer.nvim/compare/v1.1.0...v1.1.1) (2025-10-21)
 
 
