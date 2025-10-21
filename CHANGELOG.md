@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/dkooll/bouncer.nvim/compare/v1.1.0...v1.1.1) (2025-10-21)
+
+
+### Bug Fixes
+
+* honor custom registry hosts in cache and version lookups ([#6](https://github.com/dkooll/bouncer.nvim/issues/6)) ([e3bedf1](https://github.com/dkooll/bouncer.nvim/commit/e3bedf14dd7ef9827e5a3638081d39c2ed96e27a))
+
 ## [1.1.0](https://github.com/dkooll/bouncer.nvim/compare/v1.0.0...v1.1.0) (2025-10-21)
 
 
