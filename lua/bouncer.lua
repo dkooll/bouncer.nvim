@@ -5,6 +5,23 @@ local registry_config = {}
 local registry_version_cache = {}
 local version_cache = {}
 
+local DEFAULT_REGISTRY_HOST = "registry.terraform.io"
+
+local function normalize_host(host)
+  if not host or host == "" then
+    return DEFAULT_REGISTRY_HOST
+  end
+
+  local cleaned = host:gsub("^https?://", "")
+  cleaned = cleaned:gsub("/+$", "")
+
+  if cleaned == "" then
+    return DEFAULT_REGISTRY_HOST
+  end
+
+  return cleaned
+end
+
 local patterns = {
   module_start = '^(%s*)module%s+"([^"]*)"[^{]*{%s*$',
   source_line = '^%s*source%s*=%s*"([^"]*)"',
@@ -43,8 +60,12 @@ end
 
 local function get_module_config()
   local cwd = vim.fn.getcwd()
-  if config_cache[cwd] then
-    return config_cache[cwd]
+  local current_host = normalize_host(registry_config.host)
+  local cached = config_cache[cwd]
+  if cached
+      and cached.namespace == registry_config.namespace
+      and cached.host == current_host then
+    return cached
   end
 
   local output = vim.fn.system("basename `git rev-parse --show-toplevel`")
@@ -59,15 +80,22 @@ local function get_module_config()
     error("Could not extract provider and module from repository name: " .. repo_name)
   end
 
+  local host = current_host
   local base_path = string.format("%s/%s/%s",
     registry_config.namespace,
     module_name,
     provider)
 
+  if host ~= DEFAULT_REGISTRY_HOST then
+    base_path = string.format("%s/%s", host, base_path)
+  end
+
   local config = {
     registry_source = base_path,
     module_name = module_name,
-    provider = provider
+    provider = provider,
+    namespace = registry_config.namespace,
+    host = host
   }
 
   config_cache[cwd] = config
@@ -86,16 +114,29 @@ local function get_latest_version_info(registry_source)
   end
 
   local source_no_subdir = registry_source:match("^(.-)//") or registry_source
-  local ns, name, provider = source_no_subdir:match("^([^/]+)/([^/]+)/([^/]+)$")
+  local segments = vim.split(source_no_subdir, "/", { trimempty = true })
+  local host, ns, name, provider
 
-  if not (ns and name and provider) then
+  if #segments == 4 then
+    host, ns, name, provider = unpack(segments)
+  elseif #segments == 3 then
+    ns, name, provider = unpack(segments)
+    host = DEFAULT_REGISTRY_HOST
+  else
     vim.notify("Invalid registry source format: " .. registry_source, vim.log.levels.ERROR)
     return nil, nil
   end
 
+  host = normalize_host(host ~= "" and host or DEFAULT_REGISTRY_HOST)
+
+  local base_url = host
+  if not base_url:match("^https?://") then
+    base_url = "https://" .. base_url
+  end
+
   local registry_url = string.format(
-    "https://registry.terraform.io/v1/modules/%s/%s/%s/versions",
-    ns, name, provider
+    "%s/v1/modules/%s/%s/%s/versions",
+    base_url, ns, name, provider
   )
 
   local result = plenary_http.get({
@@ -394,8 +435,20 @@ local function process_file_for_all_modules(file_path)
   local current_line = 1
 
   for _, module in ipairs(modules) do
-    local is_registry_module = module.source_value and
-        module.source_value:match("^" .. registry_config.namespace .. "/")
+    local is_registry_module = false
+    if module.source_value then
+      local prefixes = {
+        registry_config.namespace .. "/",
+        normalize_host(registry_config.host) .. "/" .. registry_config.namespace .. "/"
+      }
+
+      for _, prefix in ipairs(prefixes) do
+        if module.source_value:match("^" .. vim.pesc(prefix)) then
+          is_registry_module = true
+          break
+        end
+      end
+    end
 
     while current_line < module.start_line do
       table.insert(new_lines, lines[current_line])
@@ -526,7 +579,7 @@ function M.setup(opts)
 
   registry_config = {
     namespace = opts.namespace,
-    host = opts.host or "registry.terraform.io"
+    host = normalize_host(opts.host)
   }
 
   create_commands()
