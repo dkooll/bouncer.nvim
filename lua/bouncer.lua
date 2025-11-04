@@ -347,6 +347,7 @@ local function parse_modules(lines)
       local brace_count = 1
       while i <= #lines and brace_count > 0 do
         local current_line = lines[i]
+        local depth_before = brace_count
 
         for char in current_line:gmatch("[{}]") do
           if char == "{" then
@@ -361,20 +362,19 @@ local function parse_modules(lines)
           break
         end
 
-        local source = current_line:match(patterns.source_line)
+        local at_module_root = depth_before == 1
+        local source = at_module_root and current_line:match(patterns.source_line) or nil
+        local commented_source = at_module_root and current_line:match(patterns.commented_source) or nil
+        local version = at_module_root and current_line:match(patterns.version_line) or nil
+        local commented_version = at_module_root and current_line:match(patterns.commented_version) or nil
+
         if source then
           module.source_value = source
-        else
-          local commented_source = current_line:match(patterns.commented_source)
-          if commented_source then
-            module.source_value = commented_source
-          end
+        elseif commented_source then
+          module.source_value = commented_source
         end
 
-        if not (current_line:match(patterns.source_line) or
-              current_line:match(patterns.version_line) or
-              current_line:match(patterns.commented_source) or
-              current_line:match(patterns.commented_version)) then
+        if not (source or version or commented_source or commented_version) then
           table.insert(module.content_lines, current_line)
         end
 
