@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/dkooll/bouncer.nvim/compare/v1.3.0...v1.3.1) (2025-11-04)
+
+
+### Bug Fixes
+
+* limit module parsing to top level lines only ([#12](https://github.com/dkooll/bouncer.nvim/issues/12)) ([cc583c1](https://github.com/dkooll/bouncer.nvim/commit/cc583c1349bfc5774ed515907739a0184a04f35b))
+
 ## [1.3.0](https://github.com/dkooll/bouncer.nvim/compare/v1.2.0...v1.3.0) (2025-10-21)
 
 
